@@ -138,6 +138,7 @@ TRYOUT_CATEGORY_ID = 1527219102773542994
 
 # Только эта роль вправе принимать траяуты и назначать тиры.
 TRYOUT_STAFF_ROLE_ID = 1527330169730105514
+TRYOUT_LOG_GIF_URL = "https://static2.klipy.com/ii/c3a19a0b747a76e98651f2b9a3cca5ff/75/63/AnCODnnC.gif"
 
 # При назначении любого тира снимается эта роль.
 TRYOUT_UNRANKED_ROLE_ID = 1527413008211640590
