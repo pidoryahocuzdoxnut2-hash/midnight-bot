@@ -1620,26 +1620,31 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
     except disnake.HTTPException:
         logging.exception("Не удалось отключить кнопки траяута %s", row["number"])
 
-    result_embed = disnake.Embed(
-        title=(
-            f"✅ Траяут №{row['number']} принят"
-            if accepted else f"❌ Траяут №{row['number']} отклонён"
-        ),
-        description=(
-            f"Игрок: <@{row['user_id']}>\n"
-            f"Тир: **{tier_name}** (<@&{TRYOUT_TIERS[tier_name]}>)\n"
-            f"Траяутер: {inter.author.mention}"
-            if accepted else
-            f"Игрок: <@{row['user_id']}>\n"
-            f"Траяутер: {inter.author.mention}"
-        ),
-        colour=0x57F287 if accepted else 0xED4245,
-    )
+    if accepted:
+        result_embed = disnake.Embed(
+            title=f"🩸 Tryout Log No{row['number']}",
+            description=(
+                f"> Tryoutee: <@{row['user_id']}>\n"
+                f"> Tryouter: {inter.author.mention}\n"
+                f"> Rank : **{tier_name}**"
+            ),
+            colour=0x2B2D31,
+        )
+        result_embed.set_image(url=TRYOUT_LOG_GIF_URL)
+        result_embed.set_footer(text=f"Tryout Log No{row['number']}")
+    else:
+        result_embed = disnake.Embed(
+            title=f"❌ Траяут №{row['number']} отклонён",
+            description=(
+                f"Игрок: <@{row['user_id']}>\n"
+                f"Траяутер: {inter.author.mention}"
+            ),
+            colour=0xED4245,
+        )
     try:
         await channel.send(embed=result_embed)
     except disnake.HTTPException:
         logging.exception("Не удалось отправить результат траяута")
-
     category = None
     if CLOSED_CATEGORY_ID:
         candidate = inter.guild.get_channel(CLOSED_CATEGORY_ID)
