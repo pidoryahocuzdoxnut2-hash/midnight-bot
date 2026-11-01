@@ -15,6 +15,42 @@ import sqlite3
 import time
 from pathlib import Path
 
+# Bothost может собирать образ со стандартными Telegram-зависимостями
+# и игнорировать requirements.txt. Устанавливаем disnake в Python,
+# которым непосредственно запущен этот файл, только если её нет.
+import importlib
+import importlib.util
+import subprocess
+import sys
+
+if importlib.util.find_spec("disnake") is None:
+    print("[Midnight] disnake не найдена; устанавливаю в текущее окружение Python...", flush=True)
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--no-cache-dir",
+                "--disable-pip-version-check",
+                "--timeout",
+                "120",
+                "--retries",
+                "5",
+                "disnake==2.12.2",
+            ],
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise SystemExit(
+            "[Midnight] Не удалось установить disnake при запуске. "
+            "Хостинг должен разрешать pip install или установить disnake "
+            "во время Docker-сборки."
+        ) from exc
+    importlib.invalidate_caches()
+    print("[Midnight] disnake установлена успешно.", flush=True)
+
 import disnake
 from disnake.ext import commands
 
@@ -295,7 +331,9 @@ tryout_lock = asyncio.Lock()
 # ================= БОТ =================
 
 INTENTS = disnake.Intents.default()
-# Нужен для выборки участников при рассылке /gw (включить и в Developer Portal).
+# Для !supp, !gw и !ms нужен Message Content Intent (включить также в Developer Portal).
+INTENTS.message_content = True
+# Для выборки участников при рассылке !gw (включить также в Developer Portal).
 INTENTS.members = True
 
 # Явно включаем регистрацию команд сервера и диагностику при запуске.
@@ -1908,12 +1946,21 @@ class SupportModal(disnake.ui.Modal):
         )
 
 
-@bot.slash_command(
-    name="supp",
-    description="Запросить помощь: ссылка, файт и место",
-    **PANEL_KWARGS,
-)
-async def supp_command(inter: disnake.ApplicationCommandInteraction):
+# !supp вызывается сообщением. Модальное окно Discord открывается только
+# через interaction, поэтому сообщение с командой даёт кнопку для формы.
+@bot.listen("on_button_click")
+async def supp_prefix_open_form(inter: disnake.MessageInteraction):
+    custom_id = inter.data.custom_id or ""
+    if not custom_id.startswith("supp:open:"):
+        return
+
+    if custom_id.removeprefix("supp:open:") != str(inter.author.id):
+        await inter.response.send_message(
+            "Эта форма открыта другим участником. Напиши !supp.",
+            ephemeral=True,
+        )
+        return
+
     await inter.response.send_modal(SupportModal())
 
 
@@ -2173,7 +2220,7 @@ async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
     if not entry or time.monotonic() - entry["created"] > GW_CONFIRM_EXPIRES:
         GW_CONFIRMATIONS.pop(parts[2], None)
         await inter.response.send_message(
-            "Подтверждение устарело. Создай новую заявку через /gw.",
+            "Подтверждение устарело. Создай новую заявку через !gw.",
             ephemeral=True,
         )
         return
@@ -2242,7 +2289,7 @@ async def gw_open_form_button(inter: disnake.MessageInteraction):
     expected_user_id = custom_id.removeprefix("gw:open:")
     if expected_user_id != str(inter.author.id):
         await inter.response.send_message(
-            "Эта форма предназначена для другого участника. Используй /gw.",
+            "Эта форма предназначена для другого участника. Используй !gw.",
             ephemeral=True,
         )
         return
@@ -2262,26 +2309,99 @@ async def gw_open_form_button(inter: disnake.MessageInteraction):
                 logging.exception("/gw: взаимодействие с Discord уже недействительно")
 
 
-@bot.slash_command(
-    name="gw",
-    description="Запросить помощь и при необходимости разослать в ЛС",
-    **PANEL_KWARGS,
+
+# ================= МАССЛОГ /MS =================
+
+MASSLOG_ROLE_ID = 1526993470638522588
+MASSLOG_DECORATION = (
+    "✬𓄂𓆩✿𓆪༺☆𓄂𓆪✧𓆜𓄂❀༻𓆪✥𓆜𓄂✬𓄂𓆩✿𓆪༺☆𓄂𓆪✧𓄂༺"
 )
-async def gw_command(inter: disnake.ApplicationCommandInteraction):
-    # Показываем модальное окно напрямую: до send_modal ничего не ожидаем.
-    # Первым ответом на slash-команду должен быть modal (не defer).
+
+
+async def send_masslog_from_message(command_message: disnake.Message):
+    """Публикация MASSLOG по !ms. Доступ есть только у стаффа."""
+    if not is_staff(command_message):
+        await command_message.reply(
+            "Доступно только стаффу.", mention_author=False,
+        )
+        return
+
+    role = command_message.guild.get_role(MASSLOG_ROLE_ID)
+    if role is None:
+        await command_message.reply(
+            "Не найдена роль MASSLOG на этом сервере. Проверь ID роли.",
+            mention_author=False,
+        )
+        return
+
+    content = (
+        "# MASSLOG EVERYONE 🍭\n\n"
+        f"{MASSLOG_DECORATION}\n\n"
+        "> МАССЛОГ — ЭТО СИГНАЛ ВЫЙТИ С СЕРВЕРА\n\n"
+        f"{MASSLOG_DECORATION}\n\n"
+        f"{role.mention}"
+    )
+
     try:
-        await inter.response.send_modal(GWModal())
-    except Exception:
-        logging.exception("/gw: не удалось открыть модальное окно")
-        if not inter.response.is_done():
-            try:
-                await inter.response.send_message(
-                    "Не удалось открыть форму GW. Проверь консоль бота и версию disnake.",
-                    ephemeral=True,
+        await command_message.channel.send(
+            content=content,
+            allowed_mentions=disnake.AllowedMentions(
+                users=False,
+                roles=[disnake.Object(id=MASSLOG_ROLE_ID)],
+                everyone=False,
+                replied_user=False,
+            ),
+            suppress_embeds=True,
+        )
+    except disnake.HTTPException:
+        logging.exception("Не удалось отправить MASSLOG через !ms")
+        await command_message.reply(
+            "Не удалось отправить MASSLOG. Проверь права бота в этом канале.",
+            mention_author=False,
+        )
+
+
+# Текстовые команды. Остальной бот по-прежнему использует InteractionBot,
+# чтобы не менять существующие slash-команды тикетов и траяутов.
+@bot.listen("on_message")
+async def midnight_prefix_commands(message: disnake.Message):
+    if message.author.bot or message.guild is None:
+        return
+    if GUILD_ID and message.guild.id != GUILD_ID:
+        return
+
+    command = message.content.strip().casefold()
+    if command == "!ms":
+        await send_masslog_from_message(message)
+        return
+
+    if command not in ("!supp", "!gw"):
+        return
+
+    if command == "!supp":
+        label = "🎃 Открыть форму SUPP"
+        button_id = f"supp:open:{message.author.id}"
+    else:
+        label = "🎃 Открыть форму GW"
+        button_id = f"gw:open:{message.author.id}"
+
+    try:
+        await message.reply(
+            "Нажми кнопку, чтобы заполнить заявку:",
+            components=[
+                disnake.ui.ActionRow(
+                    disnake.ui.Button(
+                        label=label,
+                        style=disnake.ButtonStyle.primary,
+                        custom_id=button_id,
+                    )
                 )
-            except disnake.HTTPException:
-                logging.exception("/gw: не удалось отправить сообщение об ошибке")
+            ],
+            mention_author=False,
+        )
+    except disnake.HTTPException:
+        logging.exception("Не удалось открыть форму для %s", command)
+
 
 # ================= ЗАПУСК =================
 
@@ -2321,11 +2441,6 @@ async def on_ready():
                     "Команда /tryout отсутствует в Discord. Убедись, что "
                     "запущен именно этот файл, GUILD_ID правильный, "
                     "а другие копии бота с тем же токеном выключены."
-                )
-            if "gw" not in registered_names:
-                logging.error(
-                    "Команда /gw отсутствует в зарегистрированных командах Discord. "
-                    "Проверь GUILD_ID и выключи другие копии бота с тем же токеном."
                 )
 
 
