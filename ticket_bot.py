@@ -139,6 +139,7 @@ TRYOUT_CATEGORY_ID = 1527219102773542994
 # Только эта роль вправе принимать траяуты и назначать тиры.
 TRYOUT_STAFF_ROLE_ID = 1527330169730105514
 TRYOUT_LOG_GIF_URL = "https://static2.klipy.com/ii/c3a19a0b747a76e98651f2b9a3cca5ff/75/63/AnCODnnC.gif"
+TRYOUT_LOG_CHANNEL_ID = 1527664670532567123
 
 # При назначении любого тира снимается эта роль.
 TRYOUT_UNRANKED_ROLE_ID = 1527413008211640590
@@ -1643,9 +1644,15 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
             colour=0xED4245,
         )
     try:
-        await channel.send(embed=result_embed)
-    except disnake.HTTPException:
-        logging.exception("Не удалось отправить результат траяута")
+        log_channel = inter.guild.get_channel(TRYOUT_LOG_CHANNEL_ID)
+        if log_channel is None:
+            log_channel = await bot.fetch_channel(TRYOUT_LOG_CHANNEL_ID)
+        await log_channel.send(embed=result_embed)
+    except (disnake.HTTPException, disnake.Forbidden):
+        logging.exception(
+            "Не удалось отправить лог траяута в канал %s",
+            TRYOUT_LOG_CHANNEL_ID,
+        )
     category = None
     if CLOSED_CATEGORY_ID:
         candidate = inter.guild.get_channel(CLOSED_CATEGORY_ID)
