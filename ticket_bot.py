@@ -2351,7 +2351,7 @@ async def gw_command(inter: disnake.ApplicationCommandInteraction):
 
 MASSLOG_ROLE_ID = 1526993470638522588
 
-# Только эти роли могут вызывать текстовую команду !ms.
+# Только эти роли могут вызывать slash-команду /ms.
 MS_ALLOWED_ROLE_IDS = (
     1526991435834982550,
     1527329319544950784,
@@ -2364,36 +2364,48 @@ MASSLOG_DECORATION = (
 )
 
 
-async def send_masslog_from_message(command_message: disnake.Message):
-    """Публикация MASSLOG по !ms. Доступ есть только у стаффа."""
-    author_roles = {
-        role.id for role in getattr(command_message.author, "roles", [])
-    }
-    if not author_roles.intersection(MS_ALLOWED_ROLE_IDS):
-        await command_message.reply(
-            "Команда !ms доступна только участникам с разрешёнными ролями.",
-            mention_author=False,
+@bot.slash_command(
+    name="ms",
+    description="Опубликовать MASSLOG EVERYONE",
+    **PANEL_KWARGS,
+)
+async def masslog_command(inter: disnake.ApplicationCommandInteraction):
+    """Публикует MASSLOG. Доступ только у четырёх разрешённых ролей."""
+    if inter.guild is None:
+        await inter.response.send_message(
+            "Команда доступна только на сервере Discord.",
+            ephemeral=True,
         )
         return
 
-    role = command_message.guild.get_role(MASSLOG_ROLE_ID)
+    author_roles = {
+        role.id for role in getattr(inter.author, "roles", [])
+    }
+    if not author_roles.intersection(MS_ALLOWED_ROLE_IDS):
+        await inter.response.send_message(
+            "Команда /ms доступна только участникам с разрешёнными ролями.",
+            ephemeral=True,
+        )
+        return
+
+    role = inter.guild.get_role(MASSLOG_ROLE_ID)
     if role is None:
-        await command_message.reply(
+        await inter.response.send_message(
             "Не найдена роль MASSLOG на этом сервере. Проверь ID роли.",
-            mention_author=False,
+            ephemeral=True,
         )
         return
 
     content = (
-        "# MASSLOG EVERYONE 🍭\n\n"
-        f"{MASSLOG_DECORATION}\n\n"
-        "> МАССЛОГ — ЭТО СИГНАЛ ВЫЙТИ С СЕРВЕРА\n\n"
-        f"{MASSLOG_DECORATION}\n\n"
+        "# MASSLOG EVERYONE 🍭\\n\\n"
+        f"{MASSLOG_DECORATION}\\n\\n"
+        "> МАССЛОГ — ЭТО СИГНАЛ ВЫЙТИ С СЕРВЕРА\\n\\n"
+        f"{MASSLOG_DECORATION}\\n\\n"
         f"{role.mention}"
     )
 
     try:
-        await command_message.channel.send(
+        await inter.response.send_message(
             content=content,
             allowed_mentions=disnake.AllowedMentions(
                 users=False,
@@ -2404,25 +2416,12 @@ async def send_masslog_from_message(command_message: disnake.Message):
             suppress_embeds=True,
         )
     except disnake.HTTPException:
-        logging.exception("Не удалось отправить MASSLOG через !ms")
-        await command_message.reply(
-            "Не удалось отправить MASSLOG. Проверь права бота в этом канале.",
-            mention_author=False,
-        )
-
-
-# Текстовые команды. Остальной бот по-прежнему использует InteractionBot,
-# чтобы не менять существующие slash-команды тикетов и траяутов.
-@bot.listen("on_message")
-async def midnight_prefix_commands(message: disnake.Message):
-    if message.author.bot or message.guild is None:
-        return
-    if GUILD_ID and message.guild.id != GUILD_ID:
-        return
-
-    command = message.content.strip().casefold()
-    if command == "!ms":
-        await send_masslog_from_message(message)
+        logging.exception("Не удалось отправить MASSLOG через /ms")
+        if not inter.response.is_done():
+            await inter.response.send_message(
+                "Не удалось отправить MASSLOG. Проверь права бота в этом канале.",
+                ephemeral=True,
+            )
 
 
 # ================= ЗАПУСК =================
