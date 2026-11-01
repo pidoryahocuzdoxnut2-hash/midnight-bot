@@ -91,6 +91,12 @@ STAFF_ROLE_IDS = (
     1527269547181211768,
 )
 
+# Только эти роли могут использовать /gw.
+GW_ROLE_IDS = (
+    1527269547181211768,
+    1527329319544950784,
+)
+
 # Роль, которую пингуем при создании заявки.
 PING_ROLE_ID = 1527270088774914250
 
@@ -331,7 +337,7 @@ tryout_lock = asyncio.Lock()
 # ================= БОТ =================
 
 INTENTS = disnake.Intents.default()
-# Для !supp, !gw и !ms нужен Message Content Intent (включить также в Developer Portal).
+# Для оставшейся текстовой команды !ms нужен Message Content Intent.
 INTENTS.message_content = True
 # Для выборки участников при рассылке !gw (включить также в Developer Portal).
 INTENTS.members = True
@@ -364,6 +370,22 @@ def is_staff(inter):
             role.id in STAFF_ROLE_IDS
             for role in getattr(member, "roles", [])
         )
+    )
+
+
+def has_staff_role(member):
+    """Строгая проверка именно стафф-роли, без обхода через manage_guild."""
+    return any(
+        role.id in STAFF_ROLE_IDS
+        for role in getattr(member, "roles", [])
+    )
+
+
+def has_gw_role(member):
+    """Проверка доступа именно к команде /gw."""
+    return any(
+        role.id in GW_ROLE_IDS
+        for role in getattr(member, "roles", [])
     )
 
 
@@ -1836,6 +1858,8 @@ async def tryout_tier_dropdown(inter: disnake.MessageInteraction):
 
 # ================= ЗАПРОС ПОМОЩИ /SUPP =================
 
+SUPPORT_CHANNEL_ID = 1527030251446599680
+
 SUPPORT_SEPARATOR = (
     "༺✿𓄂𓆩✦𓆪༺♛𓄂𓆩𓆪༺✥𓄂𓆩☆𓆪༺✬𓄂𓆩✿𓆪༺☆𓄂𓆪✧𓆜✥𓄂"
 )
@@ -1900,6 +1924,13 @@ class SupportModal(disnake.ui.Modal):
             )
             return
 
+        if inter.channel_id != SUPPORT_CHANNEL_ID:
+            await inter.response.send_message(
+                f"Форму /supp можно отправлять только в канале <#{SUPPORT_CHANNEL_ID}>.",
+                ephemeral=True,
+            )
+            return
+
         link = support_answer(inter.text_values.get("server_link", ""))
         fight = support_answer(inter.text_values.get("fight", ""))
         place = support_answer(inter.text_values.get("place", ""))
@@ -1946,21 +1977,26 @@ class SupportModal(disnake.ui.Modal):
         )
 
 
-# !supp вызывается сообщением. Модальное окно Discord открывается только
-# через interaction, поэтому сообщение с командой даёт кнопку для формы.
-@bot.listen("on_button_click")
-async def supp_prefix_open_form(inter: disnake.MessageInteraction):
-    custom_id = inter.data.custom_id or ""
-    if not custom_id.startswith("supp:open:"):
+@bot.slash_command(
+    name="supp",
+    description="Запросить помощь: ссылка, файт и место",
+    **PANEL_KWARGS,
+)
+async def supp_command(inter: disnake.ApplicationCommandInteraction):
+    if inter.guild is None:
+        await inter.response.send_message(
+            "Команда доступна только на сервере Discord.", ephemeral=True
+        )
         return
 
-    if custom_id.removeprefix("supp:open:") != str(inter.author.id):
+    if inter.channel_id != SUPPORT_CHANNEL_ID:
         await inter.response.send_message(
-            "Эта форма открыта другим участником. Напиши !supp.",
+            f"Команда /supp доступна только в канале <#{SUPPORT_CHANNEL_ID}>.",
             ephemeral=True,
         )
         return
 
+    # Первым ответом должен быть modal: не делаем defer перед открытием формы.
     await inter.response.send_modal(SupportModal())
 
 
@@ -2058,6 +2094,13 @@ class GWModal(disnake.ui.Modal):
             )
             return
 
+        if not has_gw_role(inter.author):
+            await inter.response.send_message(
+                "Команда /gw доступна только указанным ролям.",
+                ephemeral=True,
+            )
+            return
+
         link = support_answer(inter.text_values.get("server_link", ""))
         fight = support_answer(inter.text_values.get("fight", ""))
         place = support_answer(inter.text_values.get("place", ""))
@@ -2076,7 +2119,7 @@ class GWModal(disnake.ui.Modal):
         else:
             broadcast = selection == "yes"
 
-        if broadcast and not is_staff(inter):
+        if broadcast and not has_staff_role(inter.author):
             await inter.response.send_message(
                 "Отправлять сообщения всем в ЛС может только стафф. "
                 "Сними галочку или выбери «Нет».",
@@ -2220,7 +2263,7 @@ async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
     if not entry or time.monotonic() - entry["created"] > GW_CONFIRM_EXPIRES:
         GW_CONFIRMATIONS.pop(parts[2], None)
         await inter.response.send_message(
-            "Подтверждение устарело. Создай новую заявку через !gw.",
+            "Подтверждение устарело. Создай новую заявку через /gw.",
             ephemeral=True,
         )
         return
@@ -2243,9 +2286,9 @@ async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
         )
         return
 
-    if not is_staff(inter):
+    if not has_gw_role(inter.author):
         await inter.response.send_message(
-            "Рассылка доступна только стаффу.", ephemeral=True
+            "Рассылка доступна только указанным ролям.", ephemeral=True
         )
         return
 
@@ -2279,35 +2322,28 @@ async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
     )
 
 
-@bot.listen("on_button_click")
-async def gw_open_form_button(inter: disnake.MessageInteraction):
-    """Форма открывается отдельным взаимодействием, без таймаута slash-команды."""
-    custom_id = inter.data.custom_id or ""
-    if not custom_id.startswith("gw:open:"):
+
+@bot.slash_command(
+    name="gw",
+    description="GW — запрос помощи и рассылка участникам",
+    **PANEL_KWARGS,
+)
+async def gw_command(inter: disnake.ApplicationCommandInteraction):
+    if inter.guild is None:
+        await inter.response.send_message(
+            "Команда доступна только на сервере Discord.", ephemeral=True
+        )
         return
 
-    expected_user_id = custom_id.removeprefix("gw:open:")
-    if expected_user_id != str(inter.author.id):
+    if not has_gw_role(inter.author):
         await inter.response.send_message(
-            "Эта форма предназначена для другого участника. Используй !gw.",
+            "Команда /gw доступна только указанным ролям.",
             ephemeral=True,
         )
         return
 
-    try:
-        # Никаких долгих операций перед send_modal: Discord даёт 3 секунды.
-        await inter.response.send_modal(GWModal())
-    except (TypeError, ValueError, disnake.HTTPException):
-        logging.exception("/gw: не удалось открыть модальное окно")
-        if not inter.response.is_done():
-            try:
-                await inter.response.send_message(
-                    "Не удалось открыть форму. Проверь версию disnake и консоль бота.",
-                    ephemeral=True,
-                )
-            except disnake.HTTPException:
-                logging.exception("/gw: взаимодействие с Discord уже недействительно")
-
+    # Открываем форму сразу, без промежуточного сообщения.
+    await inter.response.send_modal(GWModal())
 
 
 # ================= МАССЛОГ /MS =================
@@ -2373,34 +2409,6 @@ async def midnight_prefix_commands(message: disnake.Message):
     command = message.content.strip().casefold()
     if command == "!ms":
         await send_masslog_from_message(message)
-        return
-
-    if command not in ("!supp", "!gw"):
-        return
-
-    if command == "!supp":
-        label = "🎃 Открыть форму SUPP"
-        button_id = f"supp:open:{message.author.id}"
-    else:
-        label = "🎃 Открыть форму GW"
-        button_id = f"gw:open:{message.author.id}"
-
-    try:
-        await message.reply(
-            "Нажми кнопку, чтобы заполнить заявку:",
-            components=[
-                disnake.ui.ActionRow(
-                    disnake.ui.Button(
-                        label=label,
-                        style=disnake.ButtonStyle.primary,
-                        custom_id=button_id,
-                    )
-                )
-            ],
-            mention_author=False,
-        )
-    except disnake.HTTPException:
-        logging.exception("Не удалось открыть форму для %s", command)
 
 
 # ================= ЗАПУСК =================
@@ -2442,6 +2450,13 @@ async def on_ready():
                     "запущен именно этот файл, GUILD_ID правильный, "
                     "а другие копии бота с тем же токеном выключены."
                 )
+            for required_name in ("supp", "gw"):
+                if required_name not in registered_names:
+                    logging.error(
+                        "Команда /%s отсутствует в Discord. Проверь синхронизацию, "
+                        "GUILD_ID и отсутствие второй копии бота.",
+                        required_name,
+                    )
 
 
 if __name__ == "__main__":
