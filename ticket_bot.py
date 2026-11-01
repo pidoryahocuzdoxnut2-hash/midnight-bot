@@ -95,6 +95,7 @@ STAFF_ROLE_IDS = (
 GW_ROLE_IDS = (
     1527269547181211768,
     1527329319544950784,
+    1526991435834982550,
 )
 
 # Роль, которую пингуем при создании заявки.
@@ -2119,7 +2120,7 @@ class GWModal(disnake.ui.Modal):
         else:
             broadcast = selection == "yes"
 
-        if broadcast and not has_staff_role(inter.author):
+        if broadcast and not has_gw_role(inter.author):
             await inter.response.send_message(
                 "Отправлять сообщения всем в ЛС может только стафф. "
                 "Сними галочку или выбери «Нет».",
@@ -2349,6 +2350,15 @@ async def gw_command(inter: disnake.ApplicationCommandInteraction):
 # ================= МАССЛОГ /MS =================
 
 MASSLOG_ROLE_ID = 1526993470638522588
+
+# Только эти роли могут вызывать текстовую команду !ms.
+MS_ALLOWED_ROLE_IDS = (
+    1526991435834982550,
+    1527329319544950784,
+    1541576139896782918,
+    1527269547181211768,
+)
+
 MASSLOG_DECORATION = (
     "✬𓄂𓆩✿𓆪༺☆𓄂𓆪✧𓆜𓄂❀༻𓆪✥𓆜𓄂✬𓄂𓆩✿𓆪༺☆𓄂𓆪✧𓄂༺"
 )
@@ -2356,9 +2366,13 @@ MASSLOG_DECORATION = (
 
 async def send_masslog_from_message(command_message: disnake.Message):
     """Публикация MASSLOG по !ms. Доступ есть только у стаффа."""
-    if not is_staff(command_message):
+    author_roles = {
+        role.id for role in getattr(command_message.author, "roles", [])
+    }
+    if not author_roles.intersection(MS_ALLOWED_ROLE_IDS):
         await command_message.reply(
-            "Доступно только стаффу.", mention_author=False,
+            "Команда !ms доступна только участникам с разрешёнными ролями.",
+            mention_author=False,
         )
         return
 
