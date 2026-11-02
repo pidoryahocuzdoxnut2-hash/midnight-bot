@@ -1895,7 +1895,7 @@ class SupportModal(disnake.ui.Modal):
             timeout=900,
             components=[
                 disnake.ui.Label(
-                    "*Link*",
+                    "Link",
                     disnake.ui.TextInput(
                         custom_id="server_link",
                         placeholder="roqol.io/....",
@@ -1906,10 +1906,10 @@ class SupportModal(disnake.ui.Modal):
                     ),
                 ),
                 disnake.ui.Label(
-                    "*Enemy*",
+                    "Enemy",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="сп,гер,твох",
+                        placeholder="5в2",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
@@ -1917,7 +1917,7 @@ class SupportModal(disnake.ui.Modal):
                     ),
                 ),
                 disnake.ui.Label(
-                    "*Place*",
+                    "Place",
                     disnake.ui.TextInput(
                         custom_id="place",
                         placeholder="мост",
@@ -1993,7 +1993,7 @@ class SupportModal(disnake.ui.Modal):
 
 @bot.slash_command(
     name="supp",
-    description="Запросить помощь: ссылка, враги и место",
+    description="Запросить помощь: ссылка, файт и место",
     **PANEL_KWARGS,
 )
 async def supp_command(inter: disnake.ApplicationCommandInteraction):
@@ -2065,7 +2065,7 @@ class GWModal(disnake.ui.Modal):
             timeout=900,
             components=[
                 disnake.ui.Label(
-                    "*Link*",
+                    "Link",
                     disnake.ui.TextInput(
                         custom_id="server_link",
                         placeholder="roqol.io/....",
@@ -2076,10 +2076,10 @@ class GWModal(disnake.ui.Modal):
                     ),
                 ),
                 disnake.ui.Label(
-                    "*Enemy*",
+                    "Enemy",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="сп,гер,твох",
+                        placeholder="5в2",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
@@ -2087,7 +2087,7 @@ class GWModal(disnake.ui.Modal):
                     ),
                 ),
                 disnake.ui.Label(
-                    "*Place*",
+                    "Place",
                     disnake.ui.TextInput(
                         custom_id="place",
                         placeholder="мост",
