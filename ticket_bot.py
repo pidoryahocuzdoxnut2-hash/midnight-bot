@@ -1909,7 +1909,7 @@ class SupportModal(disnake.ui.Modal):
                     "Enemy",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="5в2",
+                        placeholder="сп гер твох",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
@@ -2079,7 +2079,7 @@ class GWModal(disnake.ui.Modal):
                     "Enemy",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="5в2",
+                        placeholder="сп гер твох",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
