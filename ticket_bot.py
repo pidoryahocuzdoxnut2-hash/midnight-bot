@@ -1886,6 +1886,15 @@ def support_answer(value: str) -> str:
     )
 
 
+def render_help_fields(link: str, enemy: str, place: str) -> str:
+    """Подставляет ответы из текущей анкеты, не примеры из шаблона."""
+    return (
+        f"> Link: {link}\n"
+        f"> Enemy: {enemy}\n"
+        f"> Place: {place}"
+    )
+
+
 class SupportModal(disnake.ui.Modal):
     """Три поля для одного сообщения о помощи."""
 
@@ -1909,7 +1918,7 @@ class SupportModal(disnake.ui.Modal):
                     "Enemy",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="сп гер твох",
+                        placeholder="5в2",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
@@ -1959,11 +1968,9 @@ class SupportModal(disnake.ui.Modal):
         await inter.response.defer(ephemeral=True, with_message=True)
 
         message = (
-            f"# {inter.author.mention} NEED HELP 🎃\n"
+            f"# {inter.author.mention} NEED HELP 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
-            f"> {link}\n"
-            f"> {fight}\n"
-            f"> {place}\n"
+            f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n\n"
             f"<@&{SUPPORT_PING_ROLE_ID}>"
         )
@@ -2079,7 +2086,7 @@ class GWModal(disnake.ui.Modal):
                     "Enemy",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="сп гер твох",
+                        placeholder="5в2",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
@@ -2144,11 +2151,9 @@ class GWModal(disnake.ui.Modal):
         await inter.response.defer(ephemeral=True, with_message=True)
 
         announcement = (
-            f"# {inter.author.mention} NEED HELP 🎃\n"
+            f"# {inter.author.mention} NEED HELP 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
-            f"> {link}\n"
-            f"> {fight}\n"
-            f"> {place}\n"
+            f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n\n"
             f"<@&{GW_TARGET_ROLE_ID}>"
         )
@@ -2178,11 +2183,9 @@ class GWModal(disnake.ui.Modal):
 
         # Ссылка на исходное сообщение приходит всем вместе с текстом заявки.
         dm_text = (
-            f"{inter.author.mention} NEED HELP 🎃\n"
+            f"{inter.author.mention} NEED HELP 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
-            f"> {link}\n"
-            f"> {fight}\n"
-            f"> {place}\n"
+            f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"Сообщение на сервере: {posted.jump_url}"
         )
@@ -2410,10 +2413,10 @@ async def masslog_command(inter: disnake.ApplicationCommandInteraction):
         return
 
     content = (
-        "# MASSLOG EVERYONE 🍭\\n\\n"
-        f"{MASSLOG_DECORATION}\\n\\n"
-        "> МАССЛОГ — ЭТО СИГНАЛ ВЫЙТИ С СЕРВЕРА\\n\\n"
-        f"{MASSLOG_DECORATION}\\n\\n"
+        "# MASSLOG EVERYONE 🍭\n\n"
+        f"{MASSLOG_DECORATION}\n\n"
+        "> МАССЛОГ — ЭТО СИГНАЛ ВЫЙТИ С СЕРВЕРА\n\n"
+        f"{MASSLOG_DECORATION}\n\n"
         f"{role.mention}"
     )
 
