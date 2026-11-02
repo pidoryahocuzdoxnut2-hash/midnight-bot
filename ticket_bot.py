@@ -1,11 +1,4 @@
-"""Бот тикетов: заявки Member / Guest / Ally Member.
-
-Каждая заявка открывает отдельный канал, доступный автору и стафф-ролям.
-После решения канал закрывается автоматически (TICKET_DELETE_AFTER секунд).
-"""
-
 import asyncio
-import aiohttp
 import io
 import logging
 import os
@@ -15,9 +8,11 @@ import sqlite3
 import time
 from pathlib import Path
 
-# Bothost может собирать образ со стандартными Telegram-зависимостями
-# и игнорировать requirements.txt. Устанавливаем disnake в Python,
-# которым непосредственно запущен этот файл, только если её нет.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+)
+
 import importlib
 import importlib.util
 import subprocess
@@ -51,38 +46,31 @@ if importlib.util.find_spec("disnake") is None:
     importlib.invalidate_caches()
     print("[Midnight] disnake установлена успешно.", flush=True)
 
+import aiohttp
 import disnake
 from disnake.ext import commands
 
 
-# ================= НАСТРОЙКИ =================
-
-# Отдельная переменная, чтобы бот тикетов не конфликтовал с основным ботом.
 TOKEN = os.getenv("TICKET_BOT_TOKEN") or os.getenv("DISCORD_TOKEN")
 
-# Если переменная не задана, токен читается из ticket_token.txt рядом с файлом.
 if not TOKEN:
     TOKEN_FILE = Path(__file__).resolve().with_name("ticket_token.txt")
 
     if TOKEN_FILE.exists():
         TOKEN = TOKEN_FILE.read_text(encoding="utf-8").strip() or None
 
-# Если указать GUILD_ID, команды появятся на сервере сразу. Без него — глобально.
 GUILD_ID = int(
     os.getenv("GUILD_ID", "1526991373742379069") or 0
 ) or None
 
-# Категория с открытыми тикетами.
 TICKET_CATEGORY_ID = int(
     os.getenv("TICKET_CATEGORY_ID", "1527046712349429982") or 0
 ) or None
 
-# Категория, куда переносятся закрытые тикеты.
 CLOSED_CATEGORY_ID = int(
     os.getenv("TICKET_CLOSED_CATEGORY_ID", "1526991374950469653") or 0
 ) or None
 
-# Через сколько секунд удалять канал после решения. 0 — оставить закрытым.
 DELETE_AFTER = int(os.getenv("TICKET_DELETE_AFTER", "0") or 0)
 
 STAFF_ROLE_IDS = (
@@ -91,17 +79,14 @@ STAFF_ROLE_IDS = (
     1527269547181211768,
 )
 
-# Только эти роли могут использовать /gw.
 GW_ROLE_IDS = (
     1527269547181211768,
     1527329319544950784,
     1526991435834982550,
 )
 
-# Роль, которую пингуем при создании заявки.
 PING_ROLE_ID = 1527270088774914250
 
-# Кого упоминать в сообщениях о помощи, создаваемых через /supp.
 SUPPORT_PING_ROLE_ID = 1526993734816764046
 
 GUEST_ROLE_IDS = (1527764392660176996,)
@@ -122,7 +107,6 @@ MEMBER_ROLE_IDS = (
 
 ALLY_EXTRA_ROLE_IDS = (1527764675205533807,)
 
-# Роль, которая снимается при принятии ЛЮБОЙ заявки.
 REMOVE_ROLE_IDS = (1527334034818990161,)
 
 KIND_NAMES = {
@@ -131,20 +115,15 @@ KIND_NAMES = {
     "ally": "Ally Member",
 }
 
-# ================= ТРАЯУТЫ MIDNIGHT =================
 
-# Отдельная категория для открытых траяут-тикетов.
 TRYOUT_CATEGORY_ID = 1527219102773542994
 
-# Только эта роль вправе принимать траяуты и назначать тиры.
 TRYOUT_STAFF_ROLE_ID = 1527330169730105514
 TRYOUT_LOG_GIF_URL = "https://static2.klipy.com/ii/c3a19a0b747a76e98651f2b9a3cca5ff/75/63/AnCODnnC.gif"
 TRYOUT_LOG_CHANNEL_ID = 1527664670532567123
 
-# При назначении любого тира снимается эта роль.
 TRYOUT_UNRANKED_ROLE_ID = 1527413008211640590
 
-# Выбираемый тир -> ID Discord-роли. Порядок соответствует меню.
 TRYOUT_TIERS = {
     "S tier": 1551560699224793198,
     "S- tier": 1551560520199438486,
@@ -158,8 +137,6 @@ TRYOUT_TIERS = {
 TRYOUT_COOLDOWN_SECONDS = 7 * 24 * 60 * 60
 
 
-# ================= ХРАНИЛИЩЕ =================
-
 DATA_DIR = Path(
     os.getenv("DATA_DIR") or Path(__file__).resolve().parent
 )
@@ -167,7 +144,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def data_file(name):
-    """Путь к базе в DATA_DIR. Старый файл рядом с bot.py переносится один раз."""
     target = DATA_DIR / name
     legacy = Path(__file__).resolve().with_name(name)
 
@@ -210,7 +186,6 @@ CREATE TABLE IF NOT EXISTS ticket_counter (
 );
 """)
 
-# Номер тикета: ticket 1 → closed 1, ticket 2 → closed 2 и так далее.
 COLUMNS = {
     row["name"]
     for row in db.execute("PRAGMA table_info(tickets)")
@@ -220,7 +195,12 @@ if "number" not in COLUMNS:
     db.execute("ALTER TABLE tickets ADD COLUMN number INTEGER")
 
 counter = db.execute(
-    "SELECT COALESCE(MAX(number), 0) FROM tickets"
+    """
+    SELECT MAX(
+        COALESCE((SELECT MAX(number) FROM tickets), 0),
+        COALESCE((SELECT value FROM ticket_counter WHERE id = 1), 0)
+    )
+    """
 ).fetchone()[0]
 
 for offset, row in enumerate(
@@ -247,11 +227,11 @@ db.execute(
     """,
     (counter,),
 )
+db.execute("UPDATE tickets SET state='open' WHERE state='processing'")
 db.commit()
 
 
 def next_ticket_number():
-    """Выдаёт следующий номер и увеличивает счётчик."""
     with db:
         db.execute(
             "UPDATE ticket_counter SET value = value + 1 WHERE id = 1"
@@ -262,7 +242,6 @@ def next_ticket_number():
 
 
 def free_ticket_number(number):
-    """Возвращает номер, если канал создать не удалось."""
     with db:
         db.execute(
             "UPDATE ticket_counter SET value=? WHERE id=1 AND value=?",
@@ -272,8 +251,6 @@ def free_ticket_number(number):
 
 ticket_lock = asyncio.Lock()
 
-# Траяуты храним в той же базе, но независимо от обычных тикетов.
-# Миграция безопасна для существующего tickets.sqlite3.
 db.executescript("""
 CREATE TABLE IF NOT EXISTS tryouts (
     channel_id INTEGER PRIMARY KEY,
@@ -300,15 +277,12 @@ UPDATE tryout_counter SET value = (
     FROM tryouts
 ) WHERE id = 1;
 """)
-# Старые траяуты остаются в базе; новое поле добавляется без её очистки.
 tryout_columns = {
     row["name"] for row in db.execute("PRAGMA table_info(tryouts)")
 }
 if "loadout" not in tryout_columns:
     db.execute("ALTER TABLE tryouts ADD COLUMN loadout TEXT NOT NULL DEFAULT ''")
 
-# Личный кулдаун траяутов: независимая запись на каждого игрока сервера.
-# Составной PRIMARY KEY исключает общий лимит для всех участников.
 db.execute("""
     CREATE TABLE IF NOT EXISTS tryout_cooldowns (
         guild_id INTEGER NOT NULL,
@@ -318,7 +292,6 @@ db.execute("""
     )
 """)
 
-# Переносим сроки из уже существующих траяутов: старые ограничения не теряются.
 for entry in db.execute(
     """SELECT guild_id, user_id, MAX(created_at) AS last_created_at
        FROM tryouts GROUP BY guild_id, user_id"""
@@ -337,17 +310,19 @@ db.commit()
 tryout_lock = asyncio.Lock()
 
 
-# ================= БОТ =================
-
 INTENTS = disnake.Intents.default()
-# Для оставшейся текстовой команды !ms нужен Message Content Intent.
-INTENTS.message_content = True
-# Для выборки участников при рассылке !gw (включить также в Developer Portal).
 INTENTS.members = True
 
-# Явно включаем регистрацию команд сервера и диагностику при запуске.
-# Это важно после добавления /tryout: если Discord показывает неизвестную
-# команду, в консоли будет видно, что именно зарегистрировано.
+BACKGROUND_TASKS = set()
+
+
+def run_background(coro):
+    task = asyncio.create_task(coro)
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
+    return task
+
+
 COMMAND_SYNC = commands.CommandSyncFlags.default()
 COMMAND_SYNC.sync_commands_debug = True
 COMMAND_SYNC.sync_guild_commands = True
@@ -377,7 +352,6 @@ def is_staff(inter):
 
 
 def has_staff_role(member):
-    """Строгая проверка именно стафф-роли, без обхода через manage_guild."""
     return any(
         role.id in STAFF_ROLE_IDS
         for role in getattr(member, "roles", [])
@@ -385,7 +359,6 @@ def has_staff_role(member):
 
 
 def has_gw_role(member):
-    """Проверка доступа именно к команде /gw."""
     return any(
         role.id in GW_ROLE_IDS
         for role in getattr(member, "roles", [])
@@ -406,7 +379,6 @@ async def require_staff(inter):
 
 
 def role_ids_for(kind):
-    """Какие роли выдать и снять при принятии заявки."""
     if kind == "guest":
         add_ids = list(GUEST_ROLE_IDS)
 
@@ -416,13 +388,9 @@ def role_ids_for(kind):
     else:
         add_ids = list(MEMBER_ROLE_IDS)
 
-    # Роль 1527334034818990161 снимается при принятии любой заявки.
     return add_ids, list(REMOVE_ROLE_IDS)
 
 
-# ================= ФОРМЫ ЗАЯВОК =================
-
-# (custom_id, label, placeholder, required, paragraph)
 FORMS = {
     "member": {
         "title": "Заявка — Member",
@@ -484,10 +452,6 @@ class TicketModal(disnake.ui.Modal):
         await create_ticket(inter, self.kind, inter.text_values)
 
 
-# ================= ПАНЕЛЬ =================
-
-# Оригинальную GIF скачиваем и прикрепляем к сообщению при публикации панели.
-# Оригинальная анимированная GIF, не статичный скриншот.
 BANNER_URL = (
     "https://static2.klipy.com/ii/"
     "d7aec6f6f171607374b2065c836f92f4/b4/d0/6oGlkELa.gif"
@@ -497,10 +461,6 @@ BANNER_SIZE_LIMIT = 10 * 1024 * 1024
 
 
 async def load_gif_banner():
-    """Загружает настоящую GIF для прикрепления к панели.
-
-    Если внешний сервер временно недоступен, панель откроется по прямому URL.
-    """
     try:
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -520,9 +480,7 @@ async def load_gif_banner():
         return BANNER_URL, None
 
 
-
 def make_panel(banner_url=BANNER_URL):
-    """Панель в стиле прошлого бота: баннер, текст и меню TICKET."""
     return disnake.ui.Container(
         disnake.ui.MediaGallery(
             disnake.MediaGalleryItem(banner_url)
@@ -563,7 +521,6 @@ async def post_panel(inter):
     if not await require_staff(inter):
         return
 
-    # Загрузка GIF может занять несколько секунд — отвечаем Discord сразу.
     await inter.response.defer(ephemeral=True, with_message=True)
 
     try:
@@ -625,8 +582,6 @@ async def ticket_dropdown(inter: disnake.MessageInteraction):
 
     await inter.response.send_modal(TicketModal(kind))
 
-
-# ================= СОЗДАНИЕ ТИКЕТА =================
 
 def ticket_overwrites(guild, applicant):
     overwrites = {
@@ -765,8 +720,6 @@ async def create_ticket(inter, kind, answers):
 
         for field_id, label, *_ in FORMS[kind]["fields"]:
             answer = (answers.get(field_id) or "").strip() or "—"
-            # Discord оформляет inline-code тёмным фоном, как на примере.
-            # Для многострочного ответа используем отдельный code block.
             if "\n" in answer or "\r" in answer:
                 safe_answer = answer.replace("```", "`\u200b``")
                 formatted_answer = f"```\n{safe_answer[:1016]}\n```"
@@ -853,8 +806,6 @@ async def create_ticket(inter, kind, answers):
     )
 
 
-# ================= РЕШЕНИЕ ПО ЗАЯВКЕ =================
-
 def open_ticket(channel_id):
     return db.execute(
         """
@@ -864,6 +815,31 @@ def open_ticket(channel_id):
         """,
         (channel_id,),
     ).fetchone()
+
+
+def claim_ticket(channel_id):
+    with db:
+        cursor = db.execute(
+            "UPDATE tickets SET state='processing' "
+            "WHERE channel_id=? AND state='open'",
+            (channel_id,),
+        )
+
+    if cursor.rowcount != 1:
+        return None
+
+    return db.execute(
+        "SELECT * FROM tickets WHERE channel_id=?",
+        (channel_id,),
+    ).fetchone()
+
+
+def set_ticket_state(channel_id, state):
+    with db:
+        db.execute(
+            "UPDATE tickets SET state=? WHERE channel_id=?",
+            (state, channel_id),
+        )
 
 
 async def apply_roles(guild, member, kind):
@@ -902,7 +878,6 @@ async def apply_roles(guild, member, kind):
         if role in member.roles
     ]
 
-    # Снятие роли не должно срывать принятие: если не получилось — сообщим.
     problems = []
     blocked_remove = [
         role.name for role in remove if not role.is_assignable()
@@ -948,7 +923,6 @@ async def delete_later(channel, seconds):
 
 
 async def close_channel(channel, row):
-    """Переносит канал в закрытую категорию и убирает доступ заявителя."""
     guild = channel.guild
     problems = []
 
@@ -962,7 +936,6 @@ async def close_channel(channel, row):
         else:
             problems.append("категория закрытых тикетов не найдена")
 
-    # Убираем персональный доступ заявителя: канал останется только у стаффа.
     overwrites = {
         target: overwrite
         for target, overwrite in channel.overwrites.items()
@@ -1032,7 +1005,7 @@ async def finish_ticket(inter, row, title, colour, description):
 
     if DELETE_AFTER > 0:
         text += f"\nКанал будет удалён через {DELETE_AFTER} сек."
-        asyncio.create_task(delete_later(channel, DELETE_AFTER))
+        run_background(delete_later(channel, DELETE_AFTER))
 
     await inter.edit_original_response(content=text)
 
@@ -1040,7 +1013,7 @@ async def finish_ticket(inter, row, title, colour, description):
 async def accept_ticket(inter):
     await inter.response.defer(ephemeral=True, with_message=True)
 
-    row = open_ticket(inter.channel.id)
+    row = claim_ticket(inter.channel.id)
 
     if row is None:
         await inter.edit_original_response(
@@ -1049,49 +1022,45 @@ async def accept_ticket(inter):
         return
 
     guild = inter.guild
-    member = guild.get_member(row["user_id"])
-
-    if member is None:
-        try:
-            member = await guild.fetch_member(row["user_id"])
-
-        except disnake.NotFound:
-            await inter.edit_original_response(
-                content="Заявитель уже вышел с сервера — роли выдать нельзя."
-            )
-            return
+    error_text = None
 
     try:
+        member = guild.get_member(row["user_id"])
+
+        if member is None:
+            member = await guild.fetch_member(row["user_id"])
+
         added, removed, problems = await apply_roles(
             guild, member, row["kind"]
         )
 
+    except disnake.NotFound:
+        error_text = "Заявитель уже вышел с сервера — роли выдать нельзя."
+
     except ValueError as error:
-        await inter.edit_original_response(content=str(error))
-        return
+        error_text = str(error)
 
     except disnake.Forbidden:
         logging.exception("Discord запретил выдачу ролей")
-        await inter.edit_original_response(
-            content=(
-                "Discord запретил выдачу ролей. Проверьте право "
-                "«Управлять ролями» и положение роли бота."
-            )
+        error_text = (
+            "Discord запретил выдачу ролей. Проверьте право "
+            "«Управлять ролями» и положение роли бота."
         )
-        return
 
     except disnake.HTTPException:
         logging.exception("Ошибка выдачи ролей")
-        await inter.edit_original_response(
-            content="Не удалось выдать роли. Попробуйте ещё раз."
-        )
+        error_text = "Не удалось выдать роли. Попробуйте ещё раз."
+
+    except Exception:
+        logging.exception("Непредвиденная ошибка при принятии заявки")
+        error_text = "Непредвиденная ошибка. Подробности в логах бота."
+
+    if error_text is not None:
+        set_ticket_state(row["channel_id"], "open")
+        await inter.edit_original_response(content=error_text)
         return
 
-    with db:
-        db.execute(
-            "UPDATE tickets SET state='accepted' WHERE channel_id=?",
-            (row["channel_id"],),
-        )
+    set_ticket_state(row["channel_id"], "accepted")
 
     lines = [
         f"Заявка **{KIND_NAMES[row['kind']]}** от <@{row['user_id']}> принята.",
@@ -1149,7 +1118,7 @@ class RejectModal(disnake.ui.Modal):
 
         await inter.response.defer(ephemeral=True, with_message=True)
 
-        row = open_ticket(inter.channel.id)
+        row = claim_ticket(inter.channel.id)
 
         if row is None:
             await inter.edit_original_response(
@@ -1159,11 +1128,7 @@ class RejectModal(disnake.ui.Modal):
 
         reason = (inter.text_values.get("reason") or "").strip()
 
-        with db:
-            db.execute(
-                "UPDATE tickets SET state='rejected' WHERE channel_id=?",
-                (row["channel_id"],),
-            )
+        set_ticket_state(row["channel_id"], "rejected")
 
         description = (
             f"Заявка **{KIND_NAMES[row['kind']]}** от <@{row['user_id']}> отклонена.\n"
@@ -1181,8 +1146,6 @@ class RejectModal(disnake.ui.Modal):
             description,
         )
 
-
-# ================= КНОПКИ =================
 
 @bot.listen("on_button_click")
 async def ticket_buttons(inter: disnake.MessageInteraction):
@@ -1217,11 +1180,7 @@ async def ticket_buttons(inter: disnake.MessageInteraction):
     await inter.response.send_modal(RejectModal())
 
 
-# ================= TRYOUT TICKETS =================
-
-
 def is_tryout_staff(inter):
-    """Для принятия/отказа траяута требуется именно указанная роль."""
     return (
         inter.guild is not None
         and any(
@@ -1244,7 +1203,6 @@ async def require_tryout_staff(inter):
 
 
 def make_tryout_panel():
-    """Весь текст и кнопка — в одном сообщении, как на примере."""
     embed = disnake.Embed(
         title="🎟️ › TryoutTicket",
         description=(
@@ -1278,8 +1236,6 @@ def make_tryout_panel():
     **PANEL_KWARGS,
 )
 async def tryout_command(inter: disnake.ApplicationCommandInteraction):
-    # Подтверждаем интеракцию сразу: Discord разрешает максимум 3 секунды.
-    # Публичная панель публикуется в исходном сообщении команды.
     allowed = is_staff(inter) or is_tryout_staff(inter)
     await inter.response.defer(with_message=True, ephemeral=not allowed)
 
@@ -1307,7 +1263,6 @@ def current_tryout(channel_id):
 
 
 def next_tryout_time(guild_id: int, user_id: int) -> int | None:
-    """Личный срок игрока. Чужие траяуты на него не влияют."""
     entry = db.execute(
         """SELECT last_created_at
            FROM tryout_cooldowns
@@ -1320,14 +1275,11 @@ def next_tryout_time(guild_id: int, user_id: int) -> int | None:
 
 
 def tryout_is_on_cooldown(guild_id: int, user_id: int, now: int) -> tuple[bool, int | None]:
-    """Возвращает статус ограничений только для одного Discord ID."""
     ready_at = next_tryout_time(guild_id, user_id)
     return ready_at is not None and ready_at > now, ready_at
 
 
-
 def tryout_overwrites(guild, applicant):
-    """Канал виден заявителю, боту и только роли траяутеров."""
     role = guild.get_role(TRYOUT_STAFF_ROLE_ID)
     if role is None:
         raise ValueError(
@@ -1362,8 +1314,6 @@ def tryout_overwrites(guild, applicant):
 
 
 class TryoutApplicationModal(disnake.ui.Modal):
-    """Единственный вопрос перед созданием траяута."""
-
     def __init__(self):
         super().__init__(
             title="Please fill this out",
@@ -1395,7 +1345,6 @@ class TryoutApplicationModal(disnake.ui.Modal):
 
 
 async def create_tryout(inter, loadout: str):
-    """Создать приватный траяут после анкеты с ограничением раз в 7 дней."""
     await inter.response.defer(ephemeral=True, with_message=True)
     guild = inter.guild
     applicant = inter.author
@@ -1419,14 +1368,12 @@ async def create_tryout(inter, loadout: str):
                     )
                 )
                 return
-            # Если канал удалён вручную, освобождаем запись.
             with db:
                 db.execute(
                     "UPDATE tryouts SET state='deleted' WHERE channel_id=?",
                     (old["channel_id"],),
                 )
 
-        # Кулдаун проверяем именно для автора заявки, не для всего сервера.
         limited, ready_at = tryout_is_on_cooldown(guild.id, applicant.id, now)
         if limited:
             await inter.edit_original_response(
@@ -1543,8 +1490,6 @@ async def create_tryout(inter, loadout: str):
                 ) VALUES(?,?,?,?,?,'open',?,?)""",
                 (channel.id, msg.id, guild.id, applicant.id, number, now, loadout),
             )
-            # Ставим кулдаун только создавшему траяут игроку.
-            # Другие участники сервера не затрагиваются.
             db.execute(
                 """INSERT INTO tryout_cooldowns(guild_id, user_id, last_created_at)
                    VALUES(?, ?, ?)
@@ -1559,7 +1504,6 @@ async def create_tryout(inter, loadout: str):
 
 
 async def replace_tryout_tier(guild, member, tier_name, moderator):
-    """Заменить все старые тиры на один выбранный за одно изменение ролей."""
     new_role_id = TRYOUT_TIERS[tier_name]
     new_role = guild.get_role(new_role_id)
     if new_role is None:
@@ -1591,7 +1535,6 @@ async def replace_tryout_tier(guild, member, tier_name, moderator):
         and role.id != guild.default_role.id
     ]
     new_roles.append(new_role)
-    # Одним запросом снимаем старые тиры и устанавливаем новый.
     await member.edit(
         roles=new_roles,
         reason=f"Траяут {tier_name}; назначил {moderator.id}",
@@ -1600,7 +1543,6 @@ async def replace_tryout_tier(guild, member, tier_name, moderator):
 
 
 async def finish_tryout(inter, row, *, accepted, tier_name=None):
-    """Закрывает траяут и сохраняет результат в SQLite."""
     channel = inter.channel
 
     with db:
@@ -1648,7 +1590,7 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
         if log_channel is None:
             log_channel = await bot.fetch_channel(TRYOUT_LOG_CHANNEL_ID)
         await log_channel.send(embed=result_embed)
-    except (disnake.HTTPException, disnake.Forbidden):
+    except (disnake.HTTPException, AttributeError):
         logging.exception(
             "Не удалось отправить лог траяута в канал %s",
             TRYOUT_LOG_CHANNEL_ID,
@@ -1680,7 +1622,7 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
         notes.append("⚠️ Не удалось убрать доступ заявителя или переместить канал")
 
     if DELETE_AFTER > 0:
-        asyncio.create_task(delete_later(channel, DELETE_AFTER))
+        run_background(delete_later(channel, DELETE_AFTER))
 
     response = f"✅ Траяут №{row['number']} обработан."
     if accepted:
@@ -1691,7 +1633,6 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
 
 
 async def accept_tryout_tier(inter, channel_id, tier_name):
-    """Повторно проверяем права и состояние, не доверяя значениям из меню."""
     await inter.response.defer(ephemeral=True, with_message=True)
 
     if not is_tryout_staff(inter):
@@ -1722,6 +1663,10 @@ async def accept_tryout_tier(inter, channel_id, tier_name):
 
         except ValueError as error:
             await inter.edit_original_response(content=f"❌ {error}")
+        except disnake.NotFound:
+            await inter.edit_original_response(
+                content="❌ Игрок уже вышел с сервера — тир выдать нельзя."
+            )
         except disnake.HTTPException:
             logging.exception("Не удалось назначить тир %s", tier_name)
             await inter.edit_original_response(
@@ -1790,8 +1735,6 @@ async def tryout_buttons(inter: disnake.MessageInteraction):
         return
 
     if custom_id == "tryout:create":
-        # Проверяем личный кулдаун ДО показа анкеты, чтобы игрок не заполнял
-        # форму зря. В create_tryout есть повторная проверка под блокировкой.
         limited, ready_at = tryout_is_on_cooldown(
             inter.guild.id, inter.author.id, int(time.time())
         )
@@ -1870,8 +1813,6 @@ async def tryout_tier_dropdown(inter: disnake.MessageInteraction):
     await accept_tryout_tier(inter, int(parts[2]), tier_name)
 
 
-# ================= ЗАПРОС ПОМОЩИ /SUPP =================
-
 SUPPORT_CHANNEL_ID = 1527030251446599680
 
 SUPPORT_SEPARATOR = (
@@ -1880,14 +1821,12 @@ SUPPORT_SEPARATOR = (
 
 
 def support_answer(value: str) -> str:
-    """Однострочный ответ: не даём переносами сломать текст объявления."""
     return disnake.utils.escape_mentions(
         " ".join(value.split())
     )
 
 
 def render_help_fields(link: str, enemy: str, place: str) -> str:
-    """Подставляет ответы из текущей анкеты, не примеры из шаблона."""
     return (
         f"> Link: {link}\n"
         f"> Enemy: {enemy}\n"
@@ -1896,8 +1835,6 @@ def render_help_fields(link: str, enemy: str, place: str) -> str:
 
 
 class SupportModal(disnake.ui.Modal):
-    """Три поля для одного сообщения о помощи."""
-
     def __init__(self):
         super().__init__(
             title="NEED HELP 🎃",
@@ -1964,7 +1901,6 @@ class SupportModal(disnake.ui.Modal):
             )
             return
 
-        # Сначала подтверждаем форму, затем публикуем сообщение в этот канал.
         await inter.response.defer(ephemeral=True, with_message=True)
 
         message = (
@@ -2017,17 +1953,11 @@ async def supp_command(inter: disnake.ApplicationCommandInteraction):
         )
         return
 
-    # Первым ответом должен быть modal: не делаем defer перед открытием формы.
     await inter.response.send_modal(SupportModal())
 
 
-# ================= ЗАПРОС ПОМОЩИ /GW =================
-
-# /gw пингует эту роль в канале и рассылает ЛС только её участникам.
 GW_TARGET_ROLE_ID = 1526993541765660732
 
-# Чтобы не запустить массовую отправку по ошибке, требуется явное подтверждение.
-# Рассылку может включить стафф, обычный /gw доступен как /supp.
 GW_CONFIRM_EXPIRES = 5 * 60
 GW_DM_INTERVAL_SECONDS = 0.8
 GW_CONFIRMATIONS = {}
@@ -2035,7 +1965,6 @@ GW_RUNNING_TASKS = set()
 
 
 def gw_modal_checkbox():
-    """Галочка рассылки без описания; выбор для старой версии disnake."""
     if hasattr(disnake.ui, "Checkbox"):
         return disnake.ui.Label(
             "Разослать участникам в ЛС",
@@ -2045,7 +1974,6 @@ def gw_modal_checkbox():
             ),
         )
 
-    # disnake 2.11: альтернативное меню вместо недоступной галочки.
     return disnake.ui.Label(
         "Разослать участникам в ЛС",
         disnake.ui.StringSelect(
@@ -2140,14 +2068,6 @@ class GWModal(disnake.ui.Modal):
         else:
             broadcast = selection == "yes"
 
-        if broadcast and not has_gw_role(inter.author):
-            await inter.response.send_message(
-                "Отправлять сообщения всем в ЛС может только стафф. "
-                "Сними галочку или выбери «Нет».",
-                ephemeral=True,
-            )
-            return
-
         await inter.response.defer(ephemeral=True, with_message=True)
 
         announcement = (
@@ -2181,7 +2101,6 @@ class GWModal(disnake.ui.Modal):
             )
             return
 
-        # Ссылка на исходное сообщение приходит всем вместе с текстом заявки.
         dm_text = (
             f"{inter.author.mention} NEED HELP 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
@@ -2227,18 +2146,21 @@ class GWModal(disnake.ui.Modal):
 
 
 async def gw_send_to_members(guild, text, sender):
-    """Отправляем ЛС только участникам с GW_TARGET_ROLE_ID, с паузами."""
     sent = 0
-    skipped_roles = 0
     failed = 0
     skipped_bots = 0
     try:
-        async for member in guild.fetch_members(limit=None):
+        if not guild.chunked:
+            await guild.chunk()
+
+        role = guild.get_role(GW_TARGET_ROLE_ID)
+        if role is None:
+            logging.error("/gw: роль %s не найдена", GW_TARGET_ROLE_ID)
+            return
+
+        for member in list(role.members):
             if member.bot:
                 skipped_bots += 1
-                continue
-            if not any(role.id == GW_TARGET_ROLE_ID for role in member.roles):
-                skipped_roles += 1
                 continue
             try:
                 await member.send(
@@ -2256,12 +2178,11 @@ async def gw_send_to_members(guild, text, sender):
     finally:
         logging.info(
             "/gw: рассылка завершена. Организатор: %s, сервер: %s, "
-            "отправлено: %s, закрытые ЛС/ошибки: %s, исключено по роли: %s, боты: %s",
+            "отправлено: %s, закрытые ЛС/ошибки: %s, боты: %s",
             sender,
             guild.id,
             sent,
             failed,
-            skipped_roles,
             skipped_bots,
         )
 
@@ -2316,7 +2237,6 @@ async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
         )
         return
 
-    # Без Server Members Intent бот не сможет надёжно определить всех получателей.
     if not bot.intents.members:
         await inter.response.send_message(
             "Включи Server Members Intent для рассылки.", ephemeral=True
@@ -2339,7 +2259,6 @@ async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
     )
 
 
-
 @bot.slash_command(
     name="gw",
     description="GW — запрос помощи и рассылка участникам",
@@ -2359,15 +2278,11 @@ async def gw_command(inter: disnake.ApplicationCommandInteraction):
         )
         return
 
-    # Открываем форму сразу, без промежуточного сообщения.
     await inter.response.send_modal(GWModal())
 
 
-# ================= МАССЛОГ /MS =================
-
 MASSLOG_ROLE_ID = 1526993470638522588
 
-# Только эти роли могут вызывать slash-команду /ms.
 MS_ALLOWED_ROLE_IDS = (
     1526991435834982550,
     1527329319544950784,
@@ -2386,7 +2301,6 @@ MASSLOG_DECORATION = (
     **PANEL_KWARGS,
 )
 async def masslog_command(inter: disnake.ApplicationCommandInteraction):
-    """Публикует MASSLOG. Доступ только у четырёх разрешённых ролей."""
     if inter.guild is None:
         await inter.response.send_message(
             "Команда доступна только на сервере Discord.",
@@ -2440,7 +2354,266 @@ async def masslog_command(inter: disnake.ApplicationCommandInteraction):
             )
 
 
-# ================= ЗАПУСК =================
+RULES_GIF_URL = (
+    "https://cdn.discordapp.com/attachments/1465749396233912392/"
+    "1527960036666638376/dd6a1d77b4d288db.gif"
+    "?ex=6ae99fac&is=6ae84e2c"
+    "&hm=3a0247323e63146226b009c2f890e053aab570c8346258f9da6c22cccef49f1b&"
+)
+RULES_GIF_FILENAME = "rules.gif"
+
+RULES_INTRO = (
+    "Правила могут меняться только овнерами. Любое неправильное наказание "
+    "с стороны администрации наказуемо, если вам выдали неправильное "
+    "наказание (мут больше чем надо и тп) напишите об этом людям с ролью "
+    "овнер, они помогут вам."
+)
+
+RULES = {
+    "ru": {
+        "header": "🚀 • ПРАВИЛА",
+        "sections": (
+            (
+                "🕶️ • ЧАТ ПРАВИЛА — ЧП.",
+                (
+                    "☁️ 1.0 Нарушение: Спам от 4 до 6.\n"
+                    "⏰ Наказание: Мут на 15 минут. После 2 мутов будет даваться варн. (Стакается)",
+
+                    "❋ 1.1 Нарушение: Чрезмерный буллинг.\n"
+                    "⏰ Наказание: Мут на 1-4 часа (На усмотрение стаффа). "
+                    "После 2 мутов будет даваться варн. (Не стакается)",
+
+                    "✄ 1.2 Нарушение: Запрещена порнуха любого вида. Видео, фото, гиф, стики.\n"
+                    "⏰ Наказание: Мут на 1 час. После 2 мутов будет даваться варн. (Не стакается)",
+
+                    "♛ 1.3 Нарушение: Распространение личной информации участников без их разрешения.\n"
+                    "⏰ Наказание: Мут на 12-24 часа. Зависит от информации. (Не стакается)",
+
+                    "☂ 1.4 Нарушение: В чат каналах запрещается пиар всякого инородного контента "
+                    "по типу всяких сайтов, интернет-магазинов, дс-серверов, групп в контакте и "
+                    "сообществ, групп в телеге и каналов в телеге, а также запрещается проводить "
+                    "всякие сборы по типу \"Ой смотрите на эту кавайную стримершу давайте "
+                    "задонатим ей на гарнитуру\".\n"
+                    "⏰ Наказание: Мут на один день. После 2 мутов будет даваться варн. (Не стакается)",
+
+                    "✝ 1.5 Нарушение: Клип союзников любого вида.\n"
+                    "⏰ Наказание: Мут на 30-60 минут. (Не стакается)",
+
+                    "⛓ 1.6 Нарушение: Фрипинг команды /supp и прочих команд, которые пингуют много людей.\n"
+                    "⏰ Наказание: Мут на 3 часа. После 2 мутов будет даваться варн. (Стакается)",
+
+                    "☯ 1.7 Нарушение: Бить союзников 1в2, 1в3 и тд.\n"
+                    "⏰ Наказание: Варн либо мут на 1-5 часов. (Стакается)",
+                ),
+            ),
+            (
+                "🎙️ • ГОЛОСОВЫЕ ПРАВИЛА — ГП.",
+                (
+                    "❀ 1.0 Нарушение: Не спамить саундбордом.\n"
+                    "⏰ Наказание: Мут на 30 минут. После 2 мутов будет даваться варн.\n"
+                    "➕ Дополнение: Саундпад использовать можно, но спамить нельзя! (Не стакается)",
+
+                    "✧ 1.1 Нарушение: В голосовых каналах запрещается пиар всякого инородного "
+                    "контента по типу всяких сайтов, интернет-магазинов, дс-серверов, групп в "
+                    "контакте и сообществ, групп в телеге и каналов в телеге, а также запрещается "
+                    "проводить всякие сборы по типу \"Ой смотрите на эту кавайную стримершу "
+                    "давайте задонатим ей на гарнитуру\".\n"
+                    "⏰ Наказание: Мут на 1 день. После 2 мутов будет даваться варн. (Не стакается)",
+
+                    "★ 1.2 Нарушение: Запрещается оглашать личную информацию об участниках в "
+                    "голосовом канале. (Можно только с разрешения участника)\n"
+                    "⏰ Наказание: Мут на 12-24 часа. Зависит от информации. (Не стакается)",
+                ),
+            ),
+        ),
+    },
+    "en": {
+        "header": "🚀 • RULES",
+        "sections": (
+            (
+                "🕶️ • CHAT RULES — CR.",
+                (
+                    "☁️ 1.0 Violation: Spam from 4 to 6.\n"
+                    "⏰ Punishment: Mute for 15 minutes. After 2 mutes, a warn will be issued. (Stacks)",
+
+                    "❋ 1.1 Violation: Excessive bullying.\n"
+                    "⏰ Punishment: Mute for 1-4 hours (at staff discretion). "
+                    "After 2 mutes, a warn will be issued. (Does not stack)",
+
+                    "✄ 1.2 Violation: Pornography of any kind is prohibited. Videos, photos, GIFs, stickers.\n"
+                    "⏰ Punishment: Mute for 1 hour. After 2 mutes, a warn will be issued. (Does not stack)",
+
+                    "♛ 1.3 Violation: Sharing members' personal information without their permission.\n"
+                    "⏰ Punishment: Mute for 12-24 hours, depending on the information. (Does not stack)",
+
+                    "☂ 1.4 Violation: In chat channels, it is prohibited to promote any outside content "
+                    "such as websites, online stores, Discord servers, VK groups and communities, "
+                    "Telegram groups and channels. It is also prohibited to hold any fundraisers like "
+                    "\"Oh, look at this cute streamer, let's donate to her for a headset.\"\n"
+                    "⏰ Punishment: Mute for 1 day. After 2 mutes, a warn will be issued. (Does not stack)",
+
+                    "✝ 1.5 Violation: Clipping allies of any kind.\n"
+                    "⏰ Punishment: Mute for 30-60 minutes. (Does not stack)",
+
+                    "⛓ 1.6 Violation: Free-pinging with the /supp command and other commands "
+                    "that ping a lot of people.\n"
+                    "⏰ Punishment: Mute for 3 hours. After 2 mutes, a warn will be issued. (Stacks)",
+
+                    "☯ 1.7 Violation: Attacking allies 1v2, 1v3, etc.\n"
+                    "⏰ Punishment: Warn or mute for 1-5 hours. (Stacks)",
+                ),
+            ),
+            (
+                "🎙️ • VOICE RULES — VR.",
+                (
+                    "❀ 1.0 Violation: Spamming the Soundboard.\n"
+                    "⏰ Punishment: Mute for 30 minutes. After 2 mutes, a warn will be issued.\n"
+                    "➕ Addition: You can use a SoundPad, but you can't spam! (Does not stack)",
+
+                    "✧ 1.1 Violation: In voice channels, it is prohibited to promote any outside content "
+                    "such as websites, online stores, Discord servers, VK groups and communities, "
+                    "Telegram groups and channels. It is also prohibited to hold any fundraisers like "
+                    "\"Oh, look at this cute streamer, let's donate to her for a headset.\"\n"
+                    "⏰ Punishment: Mute for 1 day. After 2 mutes, a warn will be issued. (Does not stack)",
+
+                    "★ 1.2 Violation: Disclosing personal information about members in a voice channel "
+                    "is prohibited. (Allowed only with the member's permission)\n"
+                    "⏰ Punishment: Mute for 12-24 hours, depending on the information. (Does not stack)",
+                ),
+            ),
+        ),
+    },
+}
+
+
+def code_block(text):
+    return "```\n" + text.replace("```", "`​``") + "\n```"
+
+
+async def load_rules_gif():
+    for folder in (DATA_DIR, Path(__file__).resolve().parent):
+        local = folder / RULES_GIF_FILENAME
+        if local.is_file():
+            return disnake.File(local, filename=RULES_GIF_FILENAME)
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(RULES_GIF_URL) as response:
+                response.raise_for_status()
+                data = await response.content.read(BANNER_SIZE_LIMIT + 1)
+
+        if len(data) > BANNER_SIZE_LIMIT:
+            raise ValueError("GIF больше 10 МБ")
+        if not data.startswith((b"GIF87a", b"GIF89a")):
+            raise ValueError("по ссылке не GIF")
+
+        return disnake.File(io.BytesIO(data), filename=RULES_GIF_FILENAME)
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, OSError) as exc:
+        logging.warning("Не удалось загрузить GIF правил: %s", exc)
+        return None
+
+
+def make_rules_panel(with_gif):
+    items = [
+        disnake.ui.TextDisplay("## 🦇 Server Rules."),
+        disnake.ui.TextDisplay(code_block(RULES_INTRO)),
+    ]
+    if with_gif:
+        items.append(
+            disnake.ui.MediaGallery(
+                disnake.MediaGalleryItem(f"attachment://{RULES_GIF_FILENAME}")
+            )
+        )
+
+    return [
+        disnake.ui.Container(*items),
+        disnake.ui.ActionRow(
+            disnake.ui.Button(
+                label="Ru",
+                emoji="🇷🇺",
+                style=disnake.ButtonStyle.secondary,
+                custom_id="rules:ru",
+            ),
+            disnake.ui.Button(
+                label="Eng",
+                emoji="🇺🇸",
+                style=disnake.ButtonStyle.secondary,
+                custom_id="rules:en",
+            ),
+        ),
+    ]
+
+
+def make_rules_text(lang):
+    data = RULES[lang]
+    containers = []
+
+    for index, (title, rules) in enumerate(data["sections"]):
+        items = []
+        if index == 0:
+            items.append(disnake.ui.TextDisplay(f"**{data['header']}**"))
+        items.append(disnake.ui.TextDisplay(f"## {title}"))
+        items.extend(disnake.ui.TextDisplay(code_block(rule)) for rule in rules)
+        containers.append(
+            disnake.ui.Container(*items, accent_colour=disnake.Colour(0x000000))
+        )
+
+    return containers
+
+
+@bot.slash_command(
+    name="rules",
+    description="Опубликовать правила сервера",
+    **PANEL_KWARGS,
+)
+async def rules_command(inter: disnake.ApplicationCommandInteraction):
+    if inter.guild is None:
+        await inter.response.send_message(
+            "Команда доступна только на сервере Discord.", ephemeral=True
+        )
+        return
+
+    if not has_staff_role(inter.author):
+        await inter.response.send_message(
+            "Команда /rules доступна только стаффу.", ephemeral=True
+        )
+        return
+
+    await inter.response.defer(ephemeral=True, with_message=True)
+
+    gif = await load_rules_gif()
+    kwargs = {"components": make_rules_panel(gif is not None)}
+    if gif is not None:
+        kwargs["file"] = gif
+
+    try:
+        await inter.channel.send(**kwargs)
+    except disnake.HTTPException:
+        logging.exception("Не удалось опубликовать правила")
+        await inter.edit_original_response(
+            content="Не удалось опубликовать правила. Проверь права бота в этом канале."
+        )
+        return
+
+    text = "✅ Правила опубликованы."
+    if gif is None:
+        text += "\n⚠️ GIF не загрузилась, сообщение отправлено без неё."
+    await inter.edit_original_response(content=text)
+
+
+@bot.listen("on_button_click")
+async def rules_buttons(inter: disnake.MessageInteraction):
+    custom_id = inter.data.custom_id or ""
+    if custom_id not in ("rules:ru", "rules:en"):
+        return
+
+    lang = custom_id.split(":", 1)[1]
+    await inter.response.send_message(
+        components=make_rules_text(lang),
+        ephemeral=True,
+    )
+
 
 @bot.event
 async def on_ready():
@@ -2450,11 +2623,9 @@ async def on_ready():
     logging.info("GUILD_ID регистрации: %s", GUILD_ID or "глобально")
     logging.info(
         "Локальные slash-команды: %s",
-        ", ".join(sorted(command.name for command in bot.application_commands_iterator())),
+        ", ".join(sorted(command.name for command in bot.application_commands)),
     )
 
-    # При ошибке 'This command could not be processed' смотри эти строки.
-    # Discord может показывать устаревшую команду из другой версии бота.
     if GUILD_ID:
         if bot.get_guild(GUILD_ID) is None:
             logging.error(
@@ -2479,7 +2650,7 @@ async def on_ready():
                     "запущен именно этот файл, GUILD_ID правильный, "
                     "а другие копии бота с тем же токеном выключены."
                 )
-            for required_name in ("supp", "gw"):
+            for required_name in ("supp", "gw", "ms", "rules"):
                 if required_name not in registered_names:
                     logging.error(
                         "Команда /%s отсутствует в Discord. Проверь синхронизацию, "
@@ -2489,11 +2660,6 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
-
     if not TOKEN:
         raise SystemExit(
             "Не задан TICKET_BOT_TOKEN (или DISCORD_TOKEN). "
