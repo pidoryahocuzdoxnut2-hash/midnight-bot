@@ -2418,10 +2418,7 @@ async def load_rules_gif():
 
 
 def make_rules_panel(with_gif):
-    items = [
-        disnake.ui.TextDisplay("## 🦇 Server Rules."),
-        disnake.ui.TextDisplay(code_block(RULES_INTRO)),
-    ]
+    items = []
     if with_gif:
         items.append(
             disnake.ui.MediaGallery(
@@ -2429,8 +2426,10 @@ def make_rules_panel(with_gif):
             )
         )
 
-    return [
-        disnake.ui.Container(*items),
+    items.extend((
+        disnake.ui.TextDisplay("## 🦇 Server Rules."),
+        disnake.ui.TextDisplay("> " + RULES_INTRO),
+        disnake.ui.Separator(divider=True, spacing=disnake.SeparatorSpacing.small),
         disnake.ui.ActionRow(
             disnake.ui.Button(
                 label="Ru",
@@ -2445,7 +2444,9 @@ def make_rules_panel(with_gif):
                 custom_id="rules:en",
             ),
         ),
-    ]
+    ))
+
+    return [disnake.ui.Container(*items, accent_colour=disnake.Colour(0x000000))]
 
 
 def make_rules_text(lang):
