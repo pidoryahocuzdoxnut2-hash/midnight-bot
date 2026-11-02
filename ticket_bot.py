@@ -1895,7 +1895,7 @@ class SupportModal(disnake.ui.Modal):
             timeout=900,
             components=[
                 disnake.ui.Label(
-                    "Ссылка на сервер",
+                    "*Link*",
                     disnake.ui.TextInput(
                         custom_id="server_link",
                         placeholder="roqol.io/....",
@@ -1906,10 +1906,10 @@ class SupportModal(disnake.ui.Modal):
                     ),
                 ),
                 disnake.ui.Label(
-                    "Файт",
+                    "*Enemy*",
                     disnake.ui.TextInput(
                         custom_id="fight",
-                        placeholder="5в2",
+                        placeholder="сп,гер,твох",
                         style=disnake.TextInputStyle.short,
                         required=True,
                         min_length=1,
@@ -1917,7 +1917,7 @@ class SupportModal(disnake.ui.Modal):
                     ),
                 ),
                 disnake.ui.Label(
-                    "Место",
+                    "*Place*",
                     disnake.ui.TextInput(
                         custom_id="place",
                         placeholder="мост",
