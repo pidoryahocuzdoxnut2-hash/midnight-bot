@@ -2069,7 +2069,7 @@ class GWModal(disnake.ui.Modal):
         await inter.response.defer(ephemeral=True, with_message=True)
 
         announcement = (
-            f"# {inter.author.mention} GANG WAR JOIN EVERYONE 🎃\n\n"
+            "# GANG WAR JOIN EVERYONE 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n\n"
@@ -2079,7 +2079,7 @@ class GWModal(disnake.ui.Modal):
             posted = await inter.channel.send(
                 content=announcement,
                 allowed_mentions=disnake.AllowedMentions(
-                    users=[disnake.Object(id=inter.author.id)],
+                    users=False,
                     roles=[disnake.Object(id=GW_TARGET_ROLE_ID)],
                     everyone=False,
                     replied_user=False,
@@ -2100,7 +2100,7 @@ class GWModal(disnake.ui.Modal):
             return
 
         dm_text = (
-            f"{inter.author.mention} GANG WAR JOIN EVERYONE 🎃\n\n"
+            "GANG WAR JOIN EVERYONE 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n"
