@@ -2,7 +2,7 @@ import asyncio
 import io
 import logging
 import os
-import secrets
+import re
 import shutil
 import sqlite3
 import time
@@ -1958,9 +1958,7 @@ async def supp_command(inter: disnake.ApplicationCommandInteraction):
 
 GW_TARGET_ROLE_ID = 1526993541765660732
 
-GW_CONFIRM_EXPIRES = 5 * 60
 GW_DM_INTERVAL_SECONDS = 0.8
-GW_CONFIRMATIONS = {}
 GW_RUNNING_TASKS = set()
 
 
@@ -1996,7 +1994,7 @@ def gw_modal_checkbox():
 class GWModal(disnake.ui.Modal):
     def __init__(self):
         super().__init__(
-            title="GW — NEED HELP 🎃",
+            title="GANG WAR JOIN EVERYONE 🎃",
             timeout=900,
             components=[
                 disnake.ui.Label(
@@ -2071,7 +2069,7 @@ class GWModal(disnake.ui.Modal):
         await inter.response.defer(ephemeral=True, with_message=True)
 
         announcement = (
-            f"# {inter.author.mention} NEED HELP 🎃\n\n"
+            f"# {inter.author.mention} GANG WAR JOIN EVERYONE 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n\n"
@@ -2102,46 +2100,23 @@ class GWModal(disnake.ui.Modal):
             return
 
         dm_text = (
-            f"{inter.author.mention} NEED HELP 🎃\n\n"
+            f"{inter.author.mention} GANG WAR JOIN EVERYONE 🎃\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"Сообщение на сервере: {posted.jump_url}"
         )
-        now = time.monotonic()
-        for token, entry in list(GW_CONFIRMATIONS.items()):
-            if now - entry["created"] > GW_CONFIRM_EXPIRES:
-                del GW_CONFIRMATIONS[token]
+        task = asyncio.create_task(
+            gw_send_to_members(inter.guild, dm_text, inter.author.id)
+        )
+        GW_RUNNING_TASKS.add(task)
+        task.add_done_callback(GW_RUNNING_TASKS.discard)
 
-        token = secrets.token_hex(8)
-        GW_CONFIRMATIONS[token] = {
-            "guild_id": inter.guild.id,
-            "author_id": inter.author.id,
-            "text": dm_text,
-            "created": now,
-        }
         await inter.edit_original_response(
             content=(
-                f"✅ Сообщение опубликовано: {posted.jump_url}\n\n"
-                "**Подтвердить рассылку в ЛС только участникам с ролью** "
-                f"<@&{GW_TARGET_ROLE_ID}>?\n"
-                "Ботов пропустим; пользователи с закрытыми ЛС не получат сообщение. "
-                "Передумал — нажми «Отмена»."
-            ),
-            components=[
-                disnake.ui.ActionRow(
-                    disnake.ui.Button(
-                        label="Подтвердить рассылку",
-                        style=disnake.ButtonStyle.danger,
-                        custom_id=f"gw:confirm:{token}",
-                    ),
-                    disnake.ui.Button(
-                        label="Отмена",
-                        style=disnake.ButtonStyle.secondary,
-                        custom_id=f"gw:cancel:{token}",
-                    ),
-                )
-            ],
+                f"✅ GW опубликован: {posted.jump_url}\n"
+                f"Рассылка в ЛС участникам с ролью <@&{GW_TARGET_ROLE_ID}> запущена."
+            )
         )
 
 
@@ -2185,78 +2160,6 @@ async def gw_send_to_members(guild, text, sender):
             failed,
             skipped_bots,
         )
-
-
-@bot.listen("on_button_click")
-async def gw_confirmation_buttons(inter: disnake.MessageInteraction):
-    custom_id = inter.data.custom_id or ""
-    if not custom_id.startswith("gw:"):
-        return
-
-    parts = custom_id.split(":")
-    if len(parts) != 3 or parts[1] not in ("confirm", "cancel"):
-        return
-
-    entry = GW_CONFIRMATIONS.get(parts[2])
-    if not entry or time.monotonic() - entry["created"] > GW_CONFIRM_EXPIRES:
-        GW_CONFIRMATIONS.pop(parts[2], None)
-        await inter.response.send_message(
-            "Подтверждение устарело. Создай новую заявку через /gw.",
-            ephemeral=True,
-        )
-        return
-
-    if not inter.guild or inter.guild.id != entry["guild_id"]:
-        await inter.response.send_message("Другая гильдия.", ephemeral=True)
-        return
-
-    if inter.author.id != entry["author_id"]:
-        await inter.response.send_message(
-            "Подтвердить может только автор заявки.", ephemeral=True
-        )
-        return
-
-    if parts[1] == "cancel":
-        GW_CONFIRMATIONS.pop(parts[2], None)
-        await inter.response.edit_message(
-            content="Рассылка отменена. Сообщение в канале осталось.",
-            components=[],
-        )
-        return
-
-    if not has_gw_role(inter.author):
-        await inter.response.send_message(
-            "Рассылка доступна только указанным ролям.", ephemeral=True
-        )
-        return
-
-    if any(not task.done() for task in GW_RUNNING_TASKS):
-        await inter.response.send_message(
-            "Уже выполняется другая рассылка. Повтори попытку позже.",
-            ephemeral=True,
-        )
-        return
-
-    if not bot.intents.members:
-        await inter.response.send_message(
-            "Включи Server Members Intent для рассылки.", ephemeral=True
-        )
-        return
-
-    GW_CONFIRMATIONS.pop(parts[2], None)
-    await inter.response.defer(ephemeral=True, with_message=True)
-    task = asyncio.create_task(
-        gw_send_to_members(inter.guild, entry["text"], inter.author.id)
-    )
-    GW_RUNNING_TASKS.add(task)
-    task.add_done_callback(GW_RUNNING_TASKS.discard)
-    await inter.edit_original_response(
-        content=(
-            "✅ Рассылка запущена. Бот отправит сообщения в ЛС "
-            f"участникам с ролью <@&{GW_TARGET_ROLE_ID}>; ход выполнения виден в консоли."
-        ),
-        components=[],
-    )
 
 
 @bot.slash_command(
@@ -2615,8 +2518,753 @@ async def rules_buttons(inter: disnake.MessageInteraction):
     )
 
 
+MOD_LOG_CHANNEL_ID = int(os.getenv("MOD_LOG_CHANNEL_ID", "0") or 0) or None
+MUTE_ROLE_ID = 1528018624546340945
+MUTES_PER_WARN = 2
+WARNS_PER_KICK = 3
+
+db.executescript("""
+CREATE TABLE IF NOT EXISTS punishments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    moderator_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    rule TEXT,
+    duration INTEGER,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    counted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS punishments_user
+    ON punishments(guild_id, user_id, action, active);
+""")
+db.commit()
+
+ACTION_NAMES = {
+    "mute": "Мут",
+    "unmute": "Размут",
+    "warn": "Варн",
+    "kick": "Кик",
+    "ban": "Бан",
+    "unban": "Разбан",
+}
+
+DURATION_PART = re.compile(r"(\d+)\s*([a-zа-яё]+)", re.IGNORECASE)
+DURATION_FULL = re.compile(r"(\s*\d+\s*[a-zа-яё]+)+\s*", re.IGNORECASE)
+
+
+def unit_seconds(unit):
+    unit = unit.lower()
+    if unit.startswith(("w", "н")):
+        return 7 * 24 * 60 * 60
+    if unit.startswith(("d", "д")):
+        return 24 * 60 * 60
+    if unit.startswith(("h", "ч")):
+        return 60 * 60
+    if unit.startswith(("m", "м")):
+        return 60
+    if unit.startswith(("s", "с")):
+        return 1
+    return None
+
+
+def parse_duration(text):
+    text = (text or "").strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text) * 60
+    if not DURATION_FULL.fullmatch(text):
+        return None
+
+    total = 0
+    for amount, unit in DURATION_PART.findall(text):
+        seconds = unit_seconds(unit)
+        if seconds is None:
+            return None
+        total += int(amount) * seconds
+    return total or None
+
+
+def format_duration(seconds):
+    parts = []
+    for size, label in ((86400, "д"), (3600, "ч"), (60, "м"), (1, "с")):
+        if seconds >= size:
+            parts.append(f"{seconds // size}{label}")
+            seconds %= size
+    return " ".join(parts) or "0с"
+
+
+class UserRef:
+    def __init__(self, user_id):
+        self.id = user_id
+        self.mention = f"<@{user_id}>"
+
+    def __str__(self):
+        return str(self.id)
+
+
+def hierarchy_error(inter, member):
+    guild = inter.guild
+    author = inter.author
+
+    if member.id == author.id:
+        return "Нельзя наказать самого себя."
+    if member.id == guild.me.id:
+        return "Нельзя наказать бота."
+    if member.id == guild.owner_id:
+        return "Нельзя наказать владельца сервера."
+    if author.id != guild.owner_id and member.top_role >= author.top_role:
+        return "У этого участника роль выше или равна твоей."
+    if member.top_role >= guild.me.top_role:
+        return "Роль бота ниже роли участника. Подними роль бота в настройках."
+    return None
+
+
+async def deny(inter, text):
+    if inter.response.is_done():
+        await inter.edit_original_response(content=text)
+    else:
+        await inter.response.send_message(text, ephemeral=True)
+
+
+async def require_moderator(inter):
+    if inter.guild is None:
+        await deny(inter, "Команда доступна только на сервере.")
+        return False
+    if not is_staff(inter):
+        await deny(inter, "Эта команда только для стаффа.")
+        return False
+    return True
+
+
+def get_mute_role(guild):
+    role = guild.get_role(MUTE_ROLE_ID)
+    if role is None:
+        return None, f"Роль мута `{MUTE_ROLE_ID}` не найдена на сервере."
+    if not role.is_assignable():
+        return None, "Бот не может выдать роль мута. Подними роль бота выше неё."
+    return role, None
+
+
+def add_punishment(guild_id, user_id, moderator_id, action,
+                   duration=None, expires_at=None, counted=1):
+    with db:
+        cursor = db.execute(
+            """INSERT INTO punishments(
+                   guild_id, user_id, moderator_id, action,
+                   duration, created_at, expires_at, counted
+               ) VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                guild_id, user_id, moderator_id, action,
+                duration, int(time.time()), expires_at, counted,
+            ),
+        )
+    return cursor.lastrowid
+
+
+def close_punishments(guild_id, user_id, action):
+    with db:
+        db.execute(
+            """UPDATE punishments SET active=0
+               WHERE guild_id=? AND user_id=? AND action=? AND active=1""",
+            (guild_id, user_id, action),
+        )
+
+
+def active_warns(guild_id, user_id):
+    return db.execute(
+        """SELECT * FROM punishments
+           WHERE guild_id=? AND user_id=? AND action='warn' AND active=1
+           ORDER BY id""",
+        (guild_id, user_id),
+    ).fetchall()
+
+
+def punishment_embed(action, colour, target, moderator, case_id=None, extra=()):
+    embed = disnake.Embed(
+        title=f"{ACTION_NAMES[action]} • {target}",
+        colour=colour,
+        timestamp=disnake.utils.utcnow(),
+    )
+    embed.add_field(name="Участник", value=f"{target.mention} (`{target.id}`)", inline=False)
+    embed.add_field(name="Модератор", value=moderator.mention, inline=True)
+    for name, value in extra:
+        embed.add_field(name=name, value=value, inline=True)
+    if case_id is not None:
+        embed.set_footer(text=f"Случай #{case_id}")
+    return embed
+
+
+async def notify_user(user, guild, action, extra=()):
+    lines = [f"**{ACTION_NAMES[action]}** на сервере **{guild.name}**"]
+    lines.extend(f"{name}: {value}" for name, value in extra)
+    try:
+        await user.send("\n".join(lines))
+        return True
+    except (disnake.HTTPException, AttributeError):
+        return False
+
+
+async def mod_log(guild, embed):
+    if not MOD_LOG_CHANNEL_ID:
+        return
+    channel = guild.get_channel(MOD_LOG_CHANNEL_ID)
+    if channel is None:
+        return
+    try:
+        await channel.send(embed=embed)
+    except disnake.HTTPException:
+        logging.exception("Не удалось отправить мод-лог")
+
+
+async def finish_action(inter, embed, dm_ok=None):
+    content = None
+    if dm_ok is False:
+        content = "⚠️ Не удалось написать участнику в ЛС."
+    await inter.edit_original_response(content=content, embed=embed)
+    await mod_log(inter.guild, embed)
+
+
+async def kick_for_warns(guild, member):
+    total = len(active_warns(guild.id, member.id))
+    if total < WARNS_PER_KICK:
+        return False
+
+    extra = (("Почему", f"{WARNS_PER_KICK} варна"),)
+    dm_ok = await notify_user(member, guild, "kick", extra)
+    try:
+        await member.kick(reason=f"Автокик: {WARNS_PER_KICK} варна")
+    except disnake.HTTPException:
+        logging.exception("Не удалось кикнуть %s за варны", member.id)
+        return False
+
+    with db:
+        db.execute(
+            """UPDATE punishments SET active=0
+               WHERE guild_id=? AND user_id=? AND action='warn' AND active=1""",
+            (guild.id, member.id),
+        )
+    case_id = add_punishment(guild.id, member.id, guild.me.id, "kick")
+    embed = punishment_embed("kick", 0xE67E22, member, guild.me, case_id, extra)
+    if dm_ok is False:
+        embed.add_field(name="ЛС", value="Не удалось написать в ЛС", inline=False)
+    await mod_log(guild, embed)
+    return True
+
+
+async def give_auto_warn(guild, member):
+    rows = db.execute(
+        """SELECT id FROM punishments
+           WHERE guild_id=? AND user_id=? AND action='mute' AND counted=0
+           ORDER BY id""",
+        (guild.id, member.id),
+    ).fetchall()
+    if len(rows) < MUTES_PER_WARN:
+        return None
+
+    with db:
+        db.executemany(
+            "UPDATE punishments SET counted=1 WHERE id=?",
+            [(row["id"],) for row in rows[:MUTES_PER_WARN]],
+        )
+
+    case_id = add_punishment(guild.id, member.id, guild.me.id, "warn")
+    total = len(active_warns(guild.id, member.id))
+    extra = (("Всего варнов", str(total)), ("За что", f"{MUTES_PER_WARN} мута"))
+    await notify_user(member, guild, "warn", extra)
+    await mod_log(guild, punishment_embed("warn", 0xFEE75C, member, guild.me, case_id, extra))
+    return total
+
+
+@bot.slash_command(name="mute", description="Замутить участника", **PANEL_KWARGS)
+async def mute_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.Member = commands.Param(description="Кого замутить"),
+    duration: str = commands.Param(None, description="Срок: 15m, 2h, 1d, 1h30m. Пусто — до размута"),
+):
+    if not await require_moderator(inter):
+        return
+    error = hierarchy_error(inter, user)
+    if error:
+        await deny(inter, error)
+        return
+
+    role, error = get_mute_role(inter.guild)
+    if error:
+        await deny(inter, error)
+        return
+
+    seconds = None
+    if duration:
+        seconds = parse_duration(duration)
+        if seconds is None:
+            await deny(inter, "Не понял срок. Примеры: `15m`, `2h`, `1d`, `1h30m`.")
+            return
+
+    await inter.response.defer()
+    try:
+        await user.add_roles(role, reason=f"Мут от {inter.author}")
+    except disnake.HTTPException:
+        logging.exception("Ошибка мута")
+        await deny(inter, "Не удалось выдать роль мута. Проверь права бота.")
+        return
+
+    close_punishments(inter.guild.id, user.id, "mute")
+    expires_at = int(time.time()) + seconds if seconds else None
+    case_id = add_punishment(
+        inter.guild.id, user.id, inter.author.id, "mute",
+        duration=seconds, expires_at=expires_at, counted=0,
+    )
+
+    extra = [("Срок", format_duration(seconds) if seconds else "До размута")]
+    if expires_at:
+        extra.append(("До", f"<t:{expires_at}:f>"))
+    dm_ok = await notify_user(user, inter.guild, "mute", extra)
+    embed = punishment_embed("mute", 0xED4245, user, inter.author, case_id, extra)
+
+    total = await give_auto_warn(inter.guild, user)
+    if total is not None:
+        embed.add_field(
+            name="Автоварн",
+            value=f"Выдан за {MUTES_PER_WARN} мута. Всего варнов: {total}",
+            inline=False,
+        )
+        if await kick_for_warns(inter.guild, user):
+            embed.add_field(
+                name="Автокик",
+                value=f"Кикнут за {WARNS_PER_KICK} варна, варны обнулены",
+                inline=False,
+            )
+
+    await finish_action(inter, embed, dm_ok)
+
+
+@bot.slash_command(name="unmute", description="Снять мут", **PANEL_KWARGS)
+async def unmute_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.Member = commands.Param(description="С кого снять мут"),
+):
+    if not await require_moderator(inter):
+        return
+
+    role, error = get_mute_role(inter.guild)
+    if error:
+        await deny(inter, error)
+        return
+    if role not in user.roles:
+        await deny(inter, "У этого участника нет мута.")
+        return
+
+    await inter.response.defer()
+    try:
+        await user.remove_roles(role, reason=f"Размут от {inter.author}")
+    except disnake.HTTPException:
+        logging.exception("Ошибка размута")
+        await deny(inter, "Не удалось снять роль мута. Проверь права бота.")
+        return
+
+    close_punishments(inter.guild.id, user.id, "mute")
+    case_id = add_punishment(inter.guild.id, user.id, inter.author.id, "unmute")
+    dm_ok = await notify_user(user, inter.guild, "unmute")
+    embed = punishment_embed("unmute", 0x57F287, user, inter.author, case_id)
+    await finish_action(inter, embed, dm_ok)
+
+
+@bot.slash_command(name="warn", description="Выдать варн", **PANEL_KWARGS)
+async def warn_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.Member = commands.Param(description="Кому выдать варн"),
+):
+    if not await require_moderator(inter):
+        return
+    error = hierarchy_error(inter, user)
+    if error:
+        await deny(inter, error)
+        return
+
+    await inter.response.defer()
+    case_id = add_punishment(inter.guild.id, user.id, inter.author.id, "warn")
+    total = len(active_warns(inter.guild.id, user.id))
+    extra = (("Всего варнов", str(total)),)
+    dm_ok = await notify_user(user, inter.guild, "warn", extra)
+    embed = punishment_embed("warn", 0xFEE75C, user, inter.author, case_id, extra)
+    if await kick_for_warns(inter.guild, user):
+        embed.add_field(
+            name="Автокик",
+            value=f"Кикнут за {WARNS_PER_KICK} варна, варны обнулены",
+            inline=False,
+        )
+    await finish_action(inter, embed, dm_ok)
+
+
+@bot.slash_command(name="unwarn", description="Снять варн по номеру случая", **PANEL_KWARGS)
+async def unwarn_command(
+    inter: disnake.ApplicationCommandInteraction,
+    case: int = commands.Param(description="Номер случая из /warns", ge=1),
+):
+    if not await require_moderator(inter):
+        return
+
+    row = db.execute(
+        """SELECT * FROM punishments
+           WHERE id=? AND guild_id=? AND action='warn' AND active=1""",
+        (case, inter.guild.id),
+    ).fetchone()
+    if row is None:
+        await deny(inter, f"Активный варн #{case} не найден.")
+        return
+
+    with db:
+        db.execute("UPDATE punishments SET active=0 WHERE id=?", (case,))
+    total = len(active_warns(inter.guild.id, row["user_id"]))
+    await inter.response.send_message(
+        f"✅ Варн #{case} с <@{row['user_id']}> снят. Осталось варнов: {total}."
+    )
+
+
+@bot.slash_command(name="clearwarns", description="Снять все варны с участника", **PANEL_KWARGS)
+async def clearwarns_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.User = commands.Param(description="С кого снять варны"),
+):
+    if not await require_moderator(inter):
+        return
+
+    with db:
+        cursor = db.execute(
+            """UPDATE punishments SET active=0
+               WHERE guild_id=? AND user_id=? AND action='warn' AND active=1""",
+            (inter.guild.id, user.id),
+        )
+    await inter.response.send_message(
+        f"✅ С {user.mention} снято варнов: {cursor.rowcount}."
+    )
+
+
+@bot.slash_command(name="warns", description="Посмотреть варны участника", **PANEL_KWARGS)
+async def warns_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.User = commands.Param(description="Чьи варны показать"),
+):
+    if not await require_moderator(inter):
+        return
+
+    warns = active_warns(inter.guild.id, user.id)
+    mutes = db.execute(
+        """SELECT COUNT(*) FROM punishments
+           WHERE guild_id=? AND user_id=? AND action='mute'""",
+        (inter.guild.id, user.id),
+    ).fetchone()[0]
+
+    lines = [
+        f"`#{row['id']}` • <t:{row['created_at']}:d> • выдал <@{row['moderator_id']}>"
+        for row in warns[-20:]
+    ]
+    embed = disnake.Embed(
+        title=f"Варны • {user}",
+        colour=0xFEE75C,
+        description=(
+            f"Активных варнов: **{len(warns)}**\n"
+            f"Мутов за всё время: **{mutes}**\n\n" + "\n".join(lines)
+        ),
+    )
+    await inter.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(name="history", description="История наказаний участника", **PANEL_KWARGS)
+async def history_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.User = commands.Param(description="Чью историю показать"),
+):
+    if not await require_moderator(inter):
+        return
+
+    rows = db.execute(
+        """SELECT * FROM punishments
+           WHERE guild_id=? AND user_id=?
+           ORDER BY id DESC LIMIT 20""",
+        (inter.guild.id, user.id),
+    ).fetchall()
+    if not rows:
+        await inter.response.send_message(f"У {user.mention} нет наказаний.", ephemeral=True)
+        return
+
+    lines = []
+    for row in rows:
+        line = f"`#{row['id']}` **{ACTION_NAMES.get(row['action'], row['action'])}**"
+        if row["duration"]:
+            line += f" ({format_duration(row['duration'])})"
+        if row["action"] == "warn" and not row["active"]:
+            line += " ~~снят~~"
+        line += f" • <t:{row['created_at']}:d> • <@{row['moderator_id']}>"
+        lines.append(line)
+
+    embed = disnake.Embed(
+        title=f"История • {user}",
+        colour=0x2B2D31,
+        description="\n".join(lines),
+    )
+    await inter.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(name="kick", description="Кикнуть участника", **PANEL_KWARGS)
+async def kick_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.Member = commands.Param(description="Кого кикнуть"),
+):
+    if not await require_moderator(inter):
+        return
+    error = hierarchy_error(inter, user)
+    if error:
+        await deny(inter, error)
+        return
+
+    await inter.response.defer()
+    dm_ok = await notify_user(user, inter.guild, "kick")
+    try:
+        await user.kick(reason=f"Кик от {inter.author}")
+    except disnake.HTTPException:
+        logging.exception("Ошибка кика")
+        await deny(inter, "Не удалось кикнуть. Проверь право бота «Выгонять участников».")
+        return
+
+    case_id = add_punishment(inter.guild.id, user.id, inter.author.id, "kick")
+    embed = punishment_embed("kick", 0xE67E22, user, inter.author, case_id)
+    await finish_action(inter, embed, dm_ok)
+
+
+@bot.slash_command(name="ban", description="Забанить пользователя", **PANEL_KWARGS)
+async def ban_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.User = commands.Param(description="Кого забанить (можно ID)"),
+    duration: str = commands.Param(None, description="Срок: 1d, 7d, 2w. Пусто — навсегда"),
+    delete_messages: int = commands.Param(
+        0,
+        description="Удалить его сообщения",
+        choices={"Не удалять": 0, "За 1 час": 3600, "За 24 часа": 86400, "За 7 дней": 604800},
+    ),
+):
+    if not await require_moderator(inter):
+        return
+
+    member = inter.guild.get_member(user.id)
+    if member is not None:
+        error = hierarchy_error(inter, member)
+        if error:
+            await deny(inter, error)
+            return
+    elif user.id == inter.author.id:
+        await deny(inter, "Нельзя забанить самого себя.")
+        return
+
+    seconds = None
+    if duration:
+        seconds = parse_duration(duration)
+        if seconds is None:
+            await deny(inter, "Не понял срок. Примеры: `1d`, `7d`, `2w`.")
+            return
+
+    await inter.response.defer()
+
+    expires_at = int(time.time()) + seconds if seconds else None
+    extra = [("Срок", format_duration(seconds) if seconds else "Навсегда")]
+    if expires_at:
+        extra.append(("До", f"<t:{expires_at}:f>"))
+
+    dm_ok = None
+    if member is not None:
+        dm_ok = await notify_user(member, inter.guild, "ban", extra)
+
+    try:
+        await inter.guild.ban(
+            user,
+            reason=f"Бан от {inter.author}",
+            clean_history_duration=delete_messages,
+        )
+    except disnake.HTTPException:
+        logging.exception("Ошибка бана")
+        await deny(inter, "Не удалось забанить. Проверь право бота «Банить участников».")
+        return
+
+    close_punishments(inter.guild.id, user.id, "ban")
+    case_id = add_punishment(
+        inter.guild.id, user.id, inter.author.id, "ban",
+        duration=seconds, expires_at=expires_at,
+    )
+    embed = punishment_embed("ban", 0x992D22, user, inter.author, case_id, extra)
+    await finish_action(inter, embed, dm_ok)
+
+
+@bot.slash_command(name="unban", description="Разбанить пользователя по ID", **PANEL_KWARGS)
+async def unban_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user_id: str = commands.Param(description="ID пользователя"),
+):
+    if not await require_moderator(inter):
+        return
+
+    user_id = user_id.strip().strip("<@!>")
+    if not user_id.isdigit():
+        await deny(inter, "Нужен числовой ID пользователя.")
+        return
+    user_id = int(user_id)
+
+    await inter.response.defer()
+    try:
+        await inter.guild.unban(disnake.Object(user_id), reason=f"Разбан от {inter.author}")
+    except disnake.NotFound:
+        await deny(inter, "Этот пользователь не забанен.")
+        return
+    except disnake.HTTPException:
+        logging.exception("Ошибка разбана")
+        await deny(inter, "Не удалось разбанить. Проверь право бота «Банить участников».")
+        return
+
+    close_punishments(inter.guild.id, user_id, "ban")
+    case_id = add_punishment(inter.guild.id, user_id, inter.author.id, "unban")
+
+    try:
+        target = await bot.fetch_user(user_id)
+    except disnake.HTTPException:
+        target = UserRef(user_id)
+    embed = punishment_embed("unban", 0x57F287, target, inter.author, case_id)
+    await finish_action(inter, embed)
+
+
+@bot.slash_command(name="clear", description="Удалить сообщения в канале", **PANEL_KWARGS)
+async def clear_command(
+    inter: disnake.ApplicationCommandInteraction,
+    amount: int = commands.Param(description="Сколько сообщений удалить (1-100)", ge=1, le=100),
+    user: disnake.User = commands.Param(None, description="Удалить только сообщения этого участника"),
+):
+    if not await require_moderator(inter):
+        return
+
+    await inter.response.defer(ephemeral=True)
+    left = [amount]
+
+    def check(message):
+        if user is not None and message.author.id != user.id:
+            return False
+        if left[0] <= 0:
+            return False
+        left[0] -= 1
+        return True
+
+    try:
+        deleted = await inter.channel.purge(
+            limit=amount if user is None else 300,
+            check=check,
+        )
+    except disnake.HTTPException:
+        logging.exception("Ошибка очистки канала")
+        await deny(inter, "Не удалось удалить сообщения. Проверь право бота «Управлять сообщениями».")
+        return
+
+    await inter.edit_original_response(content=f"🧹 Удалено сообщений: {len(deleted)}.")
+
+
+@bot.listen("on_member_join")
+async def keep_mute_on_rejoin(member):
+    row = db.execute(
+        """SELECT id FROM punishments
+           WHERE guild_id=? AND user_id=? AND action='mute' AND active=1
+             AND (expires_at IS NULL OR expires_at>?)""",
+        (member.guild.id, member.id, int(time.time())),
+    ).fetchone()
+    if row is None:
+        return
+
+    role = member.guild.get_role(MUTE_ROLE_ID)
+    if role is None or not role.is_assignable():
+        return
+    try:
+        await member.add_roles(role, reason="Перезаход во время мута")
+    except disnake.HTTPException:
+        logging.exception("Не удалось вернуть мут %s", member.id)
+
+
+async def expire_mute(row):
+    guild = bot.get_guild(row["guild_id"])
+    if guild is None:
+        return
+
+    member = guild.get_member(row["user_id"])
+    role = guild.get_role(MUTE_ROLE_ID)
+    if member is not None and role is not None and role in member.roles:
+        try:
+            await member.remove_roles(role, reason="Срок мута истёк")
+        except disnake.HTTPException:
+            logging.exception("Не удалось снять мут %s", row["id"])
+            return
+
+    with db:
+        db.execute("UPDATE punishments SET active=0 WHERE id=?", (row["id"],))
+
+    if member is not None:
+        await notify_user(member, guild, "unmute", (("Почему", "Срок мута истёк"),))
+        await mod_log(
+            guild,
+            punishment_embed("unmute", 0x57F287, member, guild.me, row["id"],
+                             (("Почему", "Срок мута истёк"),)),
+        )
+
+
+async def expire_ban(row):
+    guild = bot.get_guild(row["guild_id"])
+    if guild is None:
+        return
+
+    try:
+        await guild.unban(disnake.Object(row["user_id"]), reason="Срок бана истёк")
+    except disnake.NotFound:
+        pass
+    except disnake.HTTPException:
+        logging.exception("Не удалось снять временный бан %s", row["id"])
+        return
+
+    with db:
+        db.execute("UPDATE punishments SET active=0 WHERE id=?", (row["id"],))
+    case_id = add_punishment(guild.id, row["user_id"], guild.me.id, "unban")
+    await mod_log(
+        guild,
+        punishment_embed("unban", 0x57F287, UserRef(row["user_id"]), guild.me, case_id,
+                         (("Почему", f"Истёк срок бана #{row['id']}"),)),
+    )
+
+
+async def punishment_watcher():
+    while True:
+        try:
+            rows = db.execute(
+                """SELECT * FROM punishments
+                   WHERE action IN ('mute', 'ban') AND active=1
+                     AND expires_at IS NOT NULL AND expires_at<=?""",
+                (int(time.time()),),
+            ).fetchall()
+            for row in rows:
+                if row["action"] == "mute":
+                    await expire_mute(row)
+                else:
+                    await expire_ban(row)
+        except Exception:
+            logging.exception("Ошибка в проверке сроков наказаний")
+        await asyncio.sleep(30)
+
+
+PUNISHMENT_TASK = None
+
+
 @bot.event
 async def on_ready():
+    global PUNISHMENT_TASK
+    if PUNISHMENT_TASK is None or PUNISHMENT_TASK.done():
+        PUNISHMENT_TASK = asyncio.create_task(punishment_watcher())
+
     logging.info("Бот тикетов %s запущен.", bot.user)
     logging.info("Файл бота: %s", Path(__file__).resolve())
     logging.info("База тикетов: %s", DB_PATH)
@@ -2650,7 +3298,7 @@ async def on_ready():
                     "запущен именно этот файл, GUILD_ID правильный, "
                     "а другие копии бота с тем же токеном выключены."
                 )
-            for required_name in ("supp", "gw", "ms", "rules"):
+            for required_name in ("supp", "gw", "ms", "rules", "mute", "warn", "ban"):
                 if required_name not in registered_names:
                     logging.error(
                         "Команда /%s отсутствует в Discord. Проверь синхронизацию, "
