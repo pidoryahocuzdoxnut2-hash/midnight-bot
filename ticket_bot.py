@@ -640,7 +640,7 @@ async def create_ticket(inter, kind, answers):
             """
             SELECT channel_id
             FROM tickets
-            WHERE guild_id=? AND user_id=? AND state='open'
+            WHERE guild_id=? AND user_id=? AND state IN ('open', 'processing')
             """,
             (guild.id, applicant.id),
         ).fetchone()
@@ -845,9 +845,10 @@ def set_ticket_state(channel_id, state):
 async def apply_roles(guild, member, kind):
     add_ids, remove_ids = role_ids_for(kind)
 
+    # Снимаемые роли не обязаны существовать: удалённую роль просто нечего снимать.
     missing = [
         str(role_id)
-        for role_id in add_ids + remove_ids
+        for role_id in add_ids
         if guild.get_role(role_id) is None
     ]
 
@@ -2478,7 +2479,7 @@ async def rules_command(inter: disnake.ApplicationCommandInteraction):
         )
         return
 
-    if not has_staff_role(inter.author):
+    if not is_staff(inter):
         await inter.response.send_message(
             "Команда /rules доступна только стаффу.", ephemeral=True
         )
@@ -2748,7 +2749,7 @@ async def guide_command(inter: disnake.ApplicationCommandInteraction):
         )
         return
 
-    if not has_staff_role(inter.author):
+    if not is_staff(inter):
         await inter.response.send_message(
             "Команда /guide доступна только стаффу.", ephemeral=True
         )
@@ -2797,6 +2798,8 @@ async def guide_buttons(inter: disnake.MessageInteraction):
 
 MOD_LOG_CHANNEL_ID = int(os.getenv("MOD_LOG_CHANNEL_ID", "0") or 0) or None
 MUTE_ROLE_ID = 1528018624546340945
+# Роли, которым кроме стаффа доступны только /mute и /unmute.
+MUTER_ROLE_IDS = (1527269492265320519,)
 MUTES_PER_WARN = 2
 WARNS_PER_KICK = 3
 
@@ -2841,6 +2844,9 @@ def unit_seconds(unit):
         return 24 * 60 * 60
     if unit.startswith(("h", "ч")):
         return 60 * 60
+    # Месяц проверяем раньше минут: и «mo», и «мес» тоже начинаются на m/м.
+    if unit.startswith(("mo", "мес")):
+        return 30 * 24 * 60 * 60
     if unit.startswith(("m", "м")):
         return 60
     if unit.startswith(("s", "с")):
@@ -2914,6 +2920,18 @@ async def require_moderator(inter):
         return False
     if not is_staff(inter):
         await deny(inter, "Эта команда только для стаффа.")
+        return False
+    return True
+
+
+async def require_muter(inter):
+    if inter.guild is None:
+        await deny(inter, "Команда доступна только на сервере.")
+        return False
+    if not is_staff(inter) and not any(
+        role.id in MUTER_ROLE_IDS for role in getattr(inter.author, "roles", ())
+    ):
+        await deny(inter, "Эта команда только для стаффа и мутеров.")
         return False
     return True
 
@@ -3063,7 +3081,7 @@ async def mute_command(
     user: disnake.Member = commands.Param(description="Кого замутить"),
     duration: str = commands.Param(None, description="Срок: 15m, 2h, 1d, 1h30m. Пусто — до размута"),
 ):
-    if not await require_moderator(inter):
+    if not await require_muter(inter):
         return
     error = hierarchy_error(inter, user)
     if error:
@@ -3125,7 +3143,7 @@ async def unmute_command(
     inter: disnake.ApplicationCommandInteraction,
     user: disnake.Member = commands.Param(description="С кого снять мут"),
 ):
-    if not await require_moderator(inter):
+    if not await require_muter(inter):
         return
 
     role, error = get_mute_role(inter.guild)
@@ -3318,7 +3336,7 @@ async def kick_command(
 async def ban_command(
     inter: disnake.ApplicationCommandInteraction,
     user: disnake.User = commands.Param(description="Кого забанить (можно ID)"),
-    duration: str = commands.Param(None, description="Срок: 1d, 7d, 2w. Пусто — навсегда"),
+    duration: str = commands.Param(None, description="Срок: 1d, 7d, 2w, 1mo. Пусто — навсегда"),
     delete_messages: int = commands.Param(
         0,
         description="Удалить его сообщения",
