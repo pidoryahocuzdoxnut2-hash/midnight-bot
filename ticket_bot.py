@@ -2523,11 +2523,18 @@ async def rules_buttons(inter: disnake.MessageInteraction):
 GUIDE_GIF_NAME = "guide"
 GUIDE_GIF_EXTENSIONS = (".gif", ".mp4", ".webp", ".png", ".jpg", ".jpeg")
 
-# К пунктам этой страницы подкладываются 1.gif, 2.gif… по номеру пункта.
+# Картинки пунктов этой страницы: пункт N берёт ссылку из шаблона, файлами они не
+# прикладываются. Discord пускает в одно сообщение около 25 МБ вложений, а у ссылок
+# такого предела нет. Файлы лежат в папке guide/ репозитория: 1.gif, 2.gif…
+# Другой хостинг задаётся переменной GUIDE_MEDIA_URL, пустая — без картинок.
 GUIDE_MEDIA_PAGE = "teamwork"
-# Потолок для одной картинки и для всех картинок одного сообщения.
-GUIDE_MEDIA_LIMIT = BANNER_SIZE_LIMIT
-GUIDE_MEDIA_PER_MESSAGE = 10
+GUIDE_MEDIA_URL = os.getenv(
+    "GUIDE_MEDIA_URL",
+    "https://raw.githubusercontent.com/pidoryahocuzdoxnut2-hash/midnight-bot"
+    "/main/guide/{number}.gif",
+)
+GUIDE_MEDIA_TTL = 5 * 60
+GUIDE_MEDIA_STATE = {"checked_at": float("-inf"), "available": set()}
 
 GUIDE_INTRO = (
     "Здесь вы можете ознакомиться с командами сервера, "
@@ -2671,10 +2678,10 @@ GUIDE_PAGES = {
 }
 
 
-def find_guide_gif(name=GUIDE_GIF_NAME):
+def find_guide_gif():
     for folder in (DATA_DIR, Path(__file__).resolve().parent):
         for extension in GUIDE_GIF_EXTENSIONS:
-            local = folder / f"{name}{extension}"
+            local = folder / f"{GUIDE_GIF_NAME}{extension}"
             if local.is_file():
                 return local
     return None
@@ -2718,55 +2725,75 @@ def make_guide_panel(gif_filename):
     return [disnake.ui.Container(*items, accent_colour=disnake.Colour(0x000000))]
 
 
-def make_guide_container(block, media=None):
-    items = [disnake.ui.TextDisplay(block)]
-    if media is not None:
-        items.append(
-            disnake.ui.MediaGallery(
-                disnake.MediaGalleryItem(f"attachment://{media.name}")
-            )
+def guide_media_url(number):
+    return GUIDE_MEDIA_URL.format(number=number)
+
+
+async def guide_media_reachable(session, url):
+    try:
+        async with session.head(url, allow_redirects=True) as response:
+            return response.status < 400
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return False
+
+
+async def available_guide_media(fresh=False):
+    """Номера пунктов Team work, чья картинка открывается по ссылке.
+
+    Результат держится несколько минут, чтобы не ходить в сеть на каждое нажатие.
+    """
+    if not GUIDE_MEDIA_URL:
+        return set()
+
+    state = GUIDE_MEDIA_STATE
+    if not fresh and time.monotonic() - state["checked_at"] < GUIDE_MEDIA_TTL:
+        return state["available"]
+
+    numbers = range(1, len(GUIDE_PAGES[GUIDE_MEDIA_PAGE]) + 1)
+    timeout = aiohttp.ClientTimeout(total=5)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        results = await asyncio.gather(
+            *(guide_media_reachable(session, guide_media_url(number)) for number in numbers)
         )
+
+    state["available"] = {number for number, ok in zip(numbers, results) if ok}
+    state["checked_at"] = time.monotonic()
+    return state["available"]
+
+
+def make_guide_container(block, media_url=None):
+    items = [disnake.ui.TextDisplay(block)]
+    if media_url:
+        items.append(disnake.ui.MediaGallery(disnake.MediaGalleryItem(media_url)))
 
     return disnake.ui.Container(*items, accent_colour=disnake.Colour(0x000000))
 
 
-def make_guide_messages(page):
+def make_guide_messages(page, media=()):
     """Раскладывает пункты по сообщениям так, чтобы не упереться в лимиты Discord.
 
-    Сообщение — список пар (текст пункта, путь к его картинке или None).
+    media — номера пунктов, к которым можно приложить картинку.
     """
     messages = [[]]
-    components = text = files = size = 0
+    components = text = 0
 
     for number, block in enumerate(GUIDE_PAGES[page], start=1):
-        media = find_guide_gif(str(number)) if page == GUIDE_MEDIA_PAGE else None
-        media_size = media.stat().st_size if media else 0
+        url = None
+        if page == GUIDE_MEDIA_PAGE and number in media:
+            url = guide_media_url(number)
 
-        if media_size > GUIDE_MEDIA_LIMIT:
-            logging.warning(
-                "Картинка %s больше 10 МБ, пункт %s гайда уйдёт без неё",
-                media.name,
-                number,
-            )
-            media, media_size = None, 0
-
-        used = 4 if media else 2
+        used = 4 if url else 2
 
         if messages[-1] and (
             components + used > MESSAGE_COMPONENT_LIMIT
             or text + len(block) > MESSAGE_TEXT_LIMIT
-            or (media and files >= GUIDE_MEDIA_PER_MESSAGE)
-            or size + media_size > GUIDE_MEDIA_LIMIT
         ):
             messages.append([])
-            components = text = files = size = 0
+            components = text = 0
 
-        messages[-1].append((block, media))
+        messages[-1].append(make_guide_container(block, url))
         components += used
         text += len(block)
-        if media:
-            files += 1
-            size += media_size
 
     return messages
 
@@ -2812,16 +2839,23 @@ async def guide_command(inter: disnake.ApplicationCommandInteraction):
             "сообщение отправлено без гифки."
         )
 
-    missing = [
-        f"{number}.gif"
-        for number in range(1, len(GUIDE_PAGES[GUIDE_MEDIA_PAGE]) + 1)
-        if find_guide_gif(str(number)) is None
-    ]
-    if missing:
-        text += (
-            "\n⚠️ Team work: рядом с ботом нет " + ", ".join(missing)
-            + ", эти пункты будут без картинок."
-        )
+    if GUIDE_MEDIA_URL:
+        try:
+            available = await available_guide_media(fresh=True)
+        except Exception:
+            logging.exception("Не удалось проверить картинки гайда")
+            text += "\n⚠️ Не смог проверить картинки Team work, подробности в логах бота."
+        else:
+            missing = [
+                f"{number}.gif"
+                for number in range(1, len(GUIDE_PAGES[GUIDE_MEDIA_PAGE]) + 1)
+                if number not in available
+            ]
+            if missing:
+                text += (
+                    "\n⚠️ Team work: не открываются картинки " + ", ".join(missing)
+                    + ", эти пункты будут без картинок."
+                )
     await inter.edit_original_response(content=text)
 
 
@@ -2835,27 +2869,18 @@ async def guide_buttons(inter: disnake.MessageInteraction):
     if page not in GUIDE_PAGES:
         return
 
-    # Картинки грузятся дольше 3 секунд, которые Discord даёт на ответ.
+    # Проверка картинок идёт по сети, а на ответ Discord даёт всего 3 секунды.
     await inter.response.defer(ephemeral=True, with_message=True)
 
-    for message in make_guide_messages(page):
-        paths = [path for _, path in message if path is not None]
-
+    media = ()
+    if page == GUIDE_MEDIA_PAGE:
         try:
-            await inter.followup.send(
-                components=[make_guide_container(block, path) for block, path in message],
-                files=[disnake.File(path, filename=path.name) for path in paths],
-                ephemeral=True,
-            )
-        except (disnake.HTTPException, OSError):
-            if not paths:
-                raise
+            media = await available_guide_media()
+        except Exception:
+            logging.exception("Не удалось проверить картинки гайда, шлю без них")
 
-            logging.exception("Не удалось отправить гайд %s с картинками, шлю без них", page)
-            await inter.followup.send(
-                components=[make_guide_container(block) for block, _ in message],
-                ephemeral=True,
-            )
+    for components in make_guide_messages(page, media):
+        await inter.followup.send(components=components, ephemeral=True)
 
 
 MOD_LOG_CHANNEL_ID = int(os.getenv("MOD_LOG_CHANNEL_ID", "0") or 0) or None
