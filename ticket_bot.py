@@ -462,8 +462,27 @@ BANNER_URL = (
 BANNER_FILENAME = "pulse_banner.gif"
 BANNER_SIZE_LIMIT = 10 * 1024 * 1024
 
+TICKET_GIF_NAME = "ticket"
+LOCAL_GIF_EXTENSIONS = (".gif", ".mp4", ".webp", ".png", ".jpg", ".jpeg")
+
+
+def find_local_gif(name):
+    """Файл `name` с одним из допустимых расширений рядом с ботом."""
+    for folder in (DATA_DIR, Path(__file__).resolve().parent):
+        for extension in LOCAL_GIF_EXTENSIONS:
+            local = folder / f"{name}{extension}"
+            if local.is_file():
+                return local
+    return None
+
 
 async def load_gif_banner():
+    local = find_local_gif(TICKET_GIF_NAME)
+    if local is not None:
+        if local.stat().st_size <= BANNER_SIZE_LIMIT:
+            return f"attachment://{local.name}", disnake.File(local, filename=local.name)
+        logging.warning("%s больше 10 МБ, баннер берём по ссылке", local.name)
+
     try:
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -532,7 +551,20 @@ async def post_panel(inter):
         if banner_file is not None:
             kwargs["file"] = banner_file
         await inter.channel.send(**kwargs)
-        await inter.edit_original_response(content="✅ Панель тикетов опубликована.")
+
+        text = "✅ Панель тикетов опубликована."
+        local = find_local_gif(TICKET_GIF_NAME)
+        if local is None:
+            text += (
+                f"\n⚠️ Файл `{TICKET_GIF_NAME}.gif` не найден рядом с ботом, "
+                "баннер взят по старой ссылке и может не отображаться."
+            )
+        elif banner_url != f"attachment://{local.name}":
+            text += (
+                f"\n⚠️ Файл `{local.name}` больше 10 МБ, "
+                "баннер взят по старой ссылке и может не отображаться."
+            )
+        await inter.edit_original_response(content=text)
 
     except disnake.HTTPException:
         logging.exception("Не удалось опубликовать панель тикетов")
@@ -2570,7 +2602,6 @@ async def rules_buttons(inter: disnake.MessageInteraction):
 
 
 GUIDE_GIF_NAME = "guide"
-GUIDE_GIF_EXTENSIONS = (".gif", ".mp4", ".webp", ".png", ".jpg", ".jpeg")
 
 # Картинки пунктов этой страницы: пункт N берёт ссылку из шаблона, файлами они не
 # прикладываются. Discord пускает в одно сообщение около 25 МБ вложений, а у ссылок
@@ -2727,15 +2758,6 @@ GUIDE_PAGES = {
 }
 
 
-def find_guide_gif():
-    for folder in (DATA_DIR, Path(__file__).resolve().parent):
-        for extension in GUIDE_GIF_EXTENSIONS:
-            local = folder / f"{GUIDE_GIF_NAME}{extension}"
-            if local.is_file():
-                return local
-    return None
-
-
 def make_guide_panel(gif_filename):
     items = []
     if gif_filename:
@@ -2867,7 +2889,7 @@ async def guide_command(inter: disnake.ApplicationCommandInteraction):
 
     await inter.response.defer(ephemeral=True, with_message=True)
 
-    gif_path = find_guide_gif()
+    gif_path = find_local_gif(GUIDE_GIF_NAME)
     kwargs = {"components": make_guide_panel(gif_path.name if gif_path else None)}
     if gif_path is not None:
         kwargs["file"] = disnake.File(gif_path, filename=gif_path.name)
