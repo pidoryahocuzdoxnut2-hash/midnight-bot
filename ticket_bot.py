@@ -1542,7 +1542,7 @@ async def replace_tryout_tier(guild, member, tier_name, moderator):
     return old_roles, new_role
 
 
-async def finish_tryout(inter, row, *, accepted, tier_name=None):
+async def finish_tryout(inter, row, *, accepted, tier_name=None, count=None):
     channel = inter.channel
 
     with db:
@@ -1570,6 +1570,7 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
             description=(
                 f"> Tryoutee: <@{row['user_id']}>\n"
                 f"> Tryouter: {inter.author.mention}\n"
+                f"> Count : **{count}**\n"
                 f"> Rank : **{tier_name}**"
             ),
             colour=0x2B2D31,
@@ -1632,7 +1633,7 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None):
     await inter.edit_original_response(content=response)
 
 
-async def accept_tryout_tier(inter, channel_id, tier_name):
+async def accept_tryout_tier(inter, channel_id, tier_name, count):
     await inter.response.defer(ephemeral=True, with_message=True)
 
     if not is_tryout_staff(inter):
@@ -1659,7 +1660,9 @@ async def accept_tryout_tier(inter, channel_id, tier_name):
             _, new_role = await replace_tryout_tier(
                 inter.guild, member, tier_name, inter.author
             )
-            await finish_tryout(inter, row, accepted=True, tier_name=tier_name)
+            await finish_tryout(
+                inter, row, accepted=True, tier_name=tier_name, count=count
+            )
 
         except ValueError as error:
             await inter.edit_original_response(content=f"❌ {error}")
@@ -1677,6 +1680,41 @@ async def accept_tryout_tier(inter, channel_id, tier_name):
             await inter.edit_original_response(
                 content="❌ Ошибка выдачи тира. Подробности в логах бота."
             )
+
+
+class TryoutCountModal(disnake.ui.Modal):
+    def __init__(self, channel_id, tier_name):
+        self.channel_id = channel_id
+        self.tier_name = tier_name
+
+        super().__init__(
+            title="Tryout count",
+            timeout=600,
+            components=[
+                disnake.ui.Label(
+                    "Count:",
+                    disnake.ui.TextInput(
+                        custom_id="count",
+                        placeholder="3-1 (sp box vs kcr box)",
+                        style=disnake.TextInputStyle.short,
+                        required=True,
+                        max_length=100,
+                    ),
+                )
+            ],
+        )
+
+    async def callback(self, inter: disnake.ModalInteraction):
+        count = disnake.utils.escape_mentions(
+            (inter.text_values.get("count") or "").strip()
+        )
+        if not count:
+            await inter.response.send_message(
+                "Укажи счёт, например 3-1.", ephemeral=True
+            )
+            return
+
+        await accept_tryout_tier(inter, self.channel_id, self.tier_name, count)
 
 
 class TryoutRejectModal(disnake.ui.Modal):
@@ -1809,8 +1847,16 @@ async def tryout_tier_dropdown(inter: disnake.MessageInteraction):
         )
         return
 
+    if not await require_tryout_staff(inter):
+        return
+
+    channel_id = int(parts[2])
     tier_name = inter.values[0] if inter.values else ""
-    await accept_tryout_tier(inter, int(parts[2]), tier_name)
+    if inter.channel_id != channel_id or tier_name not in TRYOUT_TIERS:
+        await inter.response.send_message("Недопустимый выбор тира.", ephemeral=True)
+        return
+
+    await inter.response.send_modal(TryoutCountModal(channel_id, tier_name))
 
 
 SUPPORT_CHANNEL_ID = 1527030251446599680
@@ -1837,7 +1883,7 @@ def render_help_fields(link: str, enemy: str, place: str) -> str:
 class SupportModal(disnake.ui.Modal):
     def __init__(self):
         super().__init__(
-            title="NEED HELP 🎃",
+            title="NEED HELP",
             timeout=900,
             components=[
                 disnake.ui.Label(
@@ -1904,7 +1950,7 @@ class SupportModal(disnake.ui.Modal):
         await inter.response.defer(ephemeral=True, with_message=True)
 
         message = (
-            f"# {inter.author.mention} NEED HELP 🎃\n\n"
+            f"# {inter.author.mention} NEED HELP\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n\n"
@@ -1930,7 +1976,7 @@ class SupportModal(disnake.ui.Modal):
             return
 
         await inter.edit_original_response(
-            content="✅ Запрос помощи опубликован в этом канале."
+            content="Запрос помощи опубликован в этом канале."
         )
 
 
@@ -1994,7 +2040,7 @@ def gw_modal_checkbox():
 class GWModal(disnake.ui.Modal):
     def __init__(self):
         super().__init__(
-            title="GANG WAR JOIN EVERYONE 🎃",
+            title="GANG WAR JOIN EVERYONE",
             timeout=900,
             components=[
                 disnake.ui.Label(
@@ -2069,7 +2115,7 @@ class GWModal(disnake.ui.Modal):
         await inter.response.defer(ephemeral=True, with_message=True)
 
         announcement = (
-            "# GANG WAR JOIN EVERYONE 🎃\n\n"
+            "# GANG WAR JOIN EVERYONE\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n\n"
@@ -2095,12 +2141,12 @@ class GWModal(disnake.ui.Modal):
 
         if not broadcast:
             await inter.edit_original_response(
-                content=f"✅ GW опубликован: {posted.jump_url}\nРассылка в ЛС выключена."
+                content=f"GW опубликован: {posted.jump_url}\nРассылка в ЛС выключена."
             )
             return
 
         dm_text = (
-            "GANG WAR JOIN EVERYONE 🎃\n\n"
+            "GANG WAR JOIN EVERYONE\n\n"
             f"{SUPPORT_SEPARATOR}\n"
             f"{render_help_fields(link, fight, place)}\n"
             f"{SUPPORT_SEPARATOR}\n"
@@ -2114,7 +2160,7 @@ class GWModal(disnake.ui.Modal):
 
         await inter.edit_original_response(
             content=(
-                f"✅ GW опубликован: {posted.jump_url}\n"
+                f"GW опубликован: {posted.jump_url}\n"
                 f"Рассылка в ЛС участникам с ролью <@&{GW_TARGET_ROLE_ID}> запущена."
             )
         )
@@ -2230,7 +2276,7 @@ async def masslog_command(inter: disnake.ApplicationCommandInteraction):
         return
 
     content = (
-        "# MASSLOG EVERYONE 🍭\n\n"
+        "# MASSLOG EVERYONE\n\n"
         f"{MASSLOG_DECORATION}\n\n"
         "> МАССЛОГ — ЭТО СИГНАЛ ВЫЙТИ С СЕРВЕРА\n\n"
         f"{MASSLOG_DECORATION}\n\n"
