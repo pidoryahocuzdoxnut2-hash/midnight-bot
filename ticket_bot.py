@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 if importlib.util.find_spec("disnake") is None:
-    print("[Midnight] disnake не найдена; устанавливаю в текущее окружение Python...", flush=True)
+    print("[Pulse] disnake не найдена; устанавливаю в текущее окружение Python...", flush=True)
     try:
         subprocess.run(
             [
@@ -38,12 +38,12 @@ if importlib.util.find_spec("disnake") is None:
         )
     except (subprocess.CalledProcessError, OSError) as exc:
         raise SystemExit(
-            "[Midnight] Не удалось установить disnake при запуске. "
+            "[Pulse] Не удалось установить disnake при запуске. "
             "Хостинг должен разрешать pip install или установить disnake "
             "во время Docker-сборки."
         ) from exc
     importlib.invalidate_caches()
-    print("[Midnight] disnake установлена успешно.", flush=True)
+    print("[Pulse] disnake установлена успешно.", flush=True)
 
 import aiohttp
 import disnake
@@ -459,7 +459,7 @@ BANNER_URL = (
     "https://static2.klipy.com/ii/"
     "d7aec6f6f171607374b2065c836f92f4/b4/d0/6oGlkELa.gif"
 )
-BANNER_FILENAME = "midnight_banner.gif"
+BANNER_FILENAME = "pulse_banner.gif"
 BANNER_SIZE_LIMIT = 10 * 1024 * 1024
 
 
@@ -489,7 +489,7 @@ def make_panel(banner_url=BANNER_URL):
             disnake.MediaGalleryItem(banner_url)
         ),
         disnake.ui.TextDisplay(
-            "## 👋 Путь в Midnight gang начинается здесь!"
+            "## 👋 Путь в Pulse gang начинается здесь!"
         ),
         disnake.ui.TextDisplay(
             "> Заявка создаёт отдельный канал, который видят "
@@ -1218,7 +1218,7 @@ def make_tryout_panel():
         ),
         colour=0x57F287,
     )
-    embed.set_footer(text="Midnight • TryoutTicket")
+    embed.set_footer(text="Pulse • TryoutTicket")
 
     components = [
         disnake.ui.ActionRow(
@@ -1439,7 +1439,7 @@ async def create_tryout(inter, loadout: str):
             inline=False,
         )
         embed.set_thumbnail(url=applicant.display_avatar.url)
-        embed.set_footer(text=f"Midnight • Tryout №{number}")
+        embed.set_footer(text=f"Pulse • Tryout №{number}")
 
         buttons = [
             disnake.ui.ActionRow(
