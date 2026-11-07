@@ -70,6 +70,10 @@ CLOSED_CATEGORY_ID = int(
     os.getenv("TICKET_CLOSED_CATEGORY_ID", "1526991374950469653") or 0
 ) or None
 
+VERIFICATION_CLOSED_CATEGORY_ID = int(
+    os.getenv("TICKET_VERIFICATION_CLOSED_CATEGORY_ID", "1527046387907428422") or 0
+) or None
+
 DELETE_AFTER = int(os.getenv("TICKET_DELETE_AFTER", "0") or 0)
 
 STAFF_ROLE_IDS = (
@@ -928,8 +932,8 @@ async def close_channel(channel, row):
 
     closed_category = None
 
-    if CLOSED_CATEGORY_ID:
-        candidate = guild.get_channel(CLOSED_CATEGORY_ID)
+    if VERIFICATION_CLOSED_CATEGORY_ID:
+        candidate = guild.get_channel(VERIFICATION_CLOSED_CATEGORY_ID)
 
         if isinstance(candidate, disnake.CategoryChannel):
             closed_category = candidate
