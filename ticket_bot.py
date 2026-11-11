@@ -3005,7 +3005,7 @@ async def clear_command(
 
 
 # ===== ВРЕМЕННО: команда /ha1to — выдать роль =====
-HA1TO_ROLE_ID = 1526991435834982550
+HA1TO_ROLE_ID = 1527269547181211768
 
 
 @bot.slash_command(
