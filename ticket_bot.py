@@ -3023,13 +3023,6 @@ async def ha1to_command(
         )
         return
 
-    # пользоваться может только стафф
-    if not is_staff(inter):
-        await inter.response.send_message(
-            "Команда доступна только стаффу.", ephemeral=True
-        )
-        return
-
     await inter.response.defer(ephemeral=True, with_message=True)
 
     role = inter.guild.get_role(HA1TO_ROLE_ID)
