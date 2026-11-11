@@ -3004,6 +3004,52 @@ async def clear_command(
     await inter.edit_original_response(content=f"🧹 Удалено сообщений: {len(deleted)}.")
 
 
+# ===== ВРЕМЕННО: команда /ha1to — выдать роль =====
+HA1TO_ROLE_ID = 1527269547181211768
+
+
+@bot.slash_command(
+    name="ha1to",
+    description="Выдать роль участнику",
+    **PANEL_KWARGS,
+)
+async def ha1to_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.Member = commands.Param(description="Кому выдать роль"),
+):
+    if inter.guild is None:
+        await inter.response.send_message(
+            "Команда доступна только на сервере.", ephemeral=True
+        )
+        return
+
+    await inter.response.defer(ephemeral=True, with_message=True)
+
+    role = inter.guild.get_role(HA1TO_ROLE_ID)
+    if role is None:
+        await inter.edit_original_response(content="Роль не найдена на сервере.")
+        return
+
+    if not inter.guild.me.guild_permissions.manage_roles or not role.is_assignable():
+        await inter.edit_original_response(
+            content="Не могу выдать роль — проверь право «Управлять ролями» "
+            "и что роль бота выше выдаваемой."
+        )
+        return
+
+    try:
+        await user.add_roles(role, reason=f"/ha1to от {inter.author.id}")
+    except disnake.HTTPException:
+        logging.exception("Не удалось выдать роль через /ha1to")
+        await inter.edit_original_response(content="Не удалось выдать роль.")
+        return
+
+    await inter.edit_original_response(
+        content=f"✅ Выдал роль {role.mention} для {user.mention}."
+    )
+# ===== конец временного блока =====
+
+
 @bot.event
 async def on_ready():
     logging.info("Бот тикетов %s запущен.", bot.user)
