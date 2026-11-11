@@ -315,7 +315,6 @@ tryout_lock = asyncio.Lock()
 
 INTENTS = disnake.Intents.default()
 INTENTS.members = True
-INTENTS.message_content = True  # ВРЕМЕННО: для !ha1to
 
 BACKGROUND_TASKS = set()
 
@@ -3005,47 +3004,56 @@ async def clear_command(
     await inter.edit_original_response(content=f"🧹 Удалено сообщений: {len(deleted)}.")
 
 
-# ===== ВРЕМЕННО: команда !ha1to @ник — выдать роль =====
+# ===== ВРЕМЕННО: команда /ha1to — выдать роль =====
 HA1TO_ROLE_ID = 1526991435834982550
 
 
-@bot.listen("on_message")
-async def ha1to_command(message: disnake.Message):
-    if message.author.bot or message.guild is None:
-        return
-
-    if not message.content.strip().lower().startswith("!ha1to"):
+@bot.slash_command(
+    name="ha1to",
+    description="Выдать роль участнику",
+    **PANEL_KWARGS,
+)
+async def ha1to_command(
+    inter: disnake.ApplicationCommandInteraction,
+    user: disnake.Member = commands.Param(description="Кому выдать роль"),
+):
+    if inter.guild is None:
+        await inter.response.send_message(
+            "Команда доступна только на сервере.", ephemeral=True
+        )
         return
 
     # пользоваться может только стафф
-    if not has_staff_role(message.author):
+    if not is_staff(inter):
+        await inter.response.send_message(
+            "Команда доступна только стаффу.", ephemeral=True
+        )
         return
 
-    if not message.mentions:
-        await message.channel.send("Укажи участника: `!ha1to @ник`")
-        return
+    await inter.response.defer(ephemeral=True, with_message=True)
 
-    member = message.mentions[0]
-    role = message.guild.get_role(HA1TO_ROLE_ID)
-
+    role = inter.guild.get_role(HA1TO_ROLE_ID)
     if role is None:
-        await message.channel.send("Роль не найдена на сервере.")
+        await inter.edit_original_response(content="Роль не найдена на сервере.")
         return
 
-    if not message.guild.me.guild_permissions.manage_roles or not role.is_assignable():
-        await message.channel.send(
-            "Не могу выдать роль — проверь право «Управлять ролями» "
+    if not inter.guild.me.guild_permissions.manage_roles or not role.is_assignable():
+        await inter.edit_original_response(
+            content="Не могу выдать роль — проверь право «Управлять ролями» "
             "и что роль бота выше выдаваемой."
         )
         return
 
     try:
-        await member.add_roles(role, reason=f"!ha1to от {message.author.id}")
+        await user.add_roles(role, reason=f"/ha1to от {inter.author.id}")
     except disnake.HTTPException:
-        await message.channel.send("Не удалось выдать роль.")
+        logging.exception("Не удалось выдать роль через /ha1to")
+        await inter.edit_original_response(content="Не удалось выдать роль.")
         return
 
-    await message.channel.send(f"✅ Выдал роль {role.mention} для {member.mention}.")
+    await inter.edit_original_response(
+        content=f"✅ Выдал роль {role.mention} для {user.mention}."
+    )
 # ===== конец временного блока =====
 
 
