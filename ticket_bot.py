@@ -3005,18 +3005,18 @@ async def clear_command(
 
 
 # ===== ВРЕМЕННО: команда /ha1to — выдать роль =====
-HA1TO_ROLE_ID = 1527269547181211768
 HA1TO_ALLOWED_USER_ID = 1013780320522358877
 
 
 @bot.slash_command(
     name="ha1to",
-    description="Выдать роль участнику",
+    description="Выдать выбранную роль участнику",
     **PANEL_KWARGS,
 )
 async def ha1to_command(
     inter: disnake.ApplicationCommandInteraction,
     user: disnake.Member = commands.Param(description="Кому выдать роль"),
+    role: disnake.Role = commands.Param(description="Какую роль выдать"),
 ):
     if inter.guild is None:
         await inter.response.send_message(
@@ -3033,15 +3033,16 @@ async def ha1to_command(
 
     await inter.response.defer(ephemeral=True, with_message=True)
 
-    role = inter.guild.get_role(HA1TO_ROLE_ID)
-    if role is None:
-        await inter.edit_original_response(content="Роль не найдена на сервере.")
-        return
-
     if not inter.guild.me.guild_permissions.manage_roles or not role.is_assignable():
         await inter.edit_original_response(
-            content="Не могу выдать роль — проверь право «Управлять ролями» "
-            "и что роль бота выше выдаваемой."
+            content=f"Не могу выдать роль {role.mention} — проверь право "
+            "«Управлять ролями» и что роль бота выше выдаваемой."
+        )
+        return
+
+    if role in user.roles:
+        await inter.edit_original_response(
+            content=f"У {user.mention} уже есть роль {role.mention}."
         )
         return
 
