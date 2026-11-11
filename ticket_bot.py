@@ -3006,6 +3006,7 @@ async def clear_command(
 
 # ===== ВРЕМЕННО: команда /ha1to — выдать роль =====
 HA1TO_ROLE_ID = 1527269547181211768
+HA1TO_ALLOWED_USER_ID = 1013780320522358877
 
 
 @bot.slash_command(
@@ -3020,6 +3021,13 @@ async def ha1to_command(
     if inter.guild is None:
         await inter.response.send_message(
             "Команда доступна только на сервере.", ephemeral=True
+        )
+        return
+
+    # пользоваться может только один конкретный пользователь
+    if inter.author.id != HA1TO_ALLOWED_USER_ID:
+        await inter.response.send_message(
+            "Эта команда тебе недоступна.", ephemeral=True
         )
         return
 
