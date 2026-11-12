@@ -1613,25 +1613,18 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None, count=None):
         )
         result_embed.set_image(url=TRYOUT_LOG_GIF_URL)
         result_embed.set_footer(text=f"Tryout Log No{row['number']}")
-    else:
-        result_embed = disnake.Embed(
-            title=f"❌ Траяут №{row['number']} отклонён",
-            description=(
-                f"Игрок: <@{row['user_id']}>\n"
-                f"Траяутер: {inter.author.mention}"
-            ),
-            colour=0xED4245,
-        )
-    try:
-        log_channel = inter.guild.get_channel(TRYOUT_LOG_CHANNEL_ID)
-        if log_channel is None:
-            log_channel = await bot.fetch_channel(TRYOUT_LOG_CHANNEL_ID)
-        await log_channel.send(embed=result_embed)
-    except (disnake.HTTPException, AttributeError):
-        logging.exception(
-            "Не удалось отправить лог траяута в канал %s",
-            TRYOUT_LOG_CHANNEL_ID,
-        )
+
+        # В канал логов пишем только принятые траяуты, отклонённые туда не попадают.
+        try:
+            log_channel = inter.guild.get_channel(TRYOUT_LOG_CHANNEL_ID)
+            if log_channel is None:
+                log_channel = await bot.fetch_channel(TRYOUT_LOG_CHANNEL_ID)
+            await log_channel.send(embed=result_embed)
+        except (disnake.HTTPException, AttributeError):
+            logging.exception(
+                "Не удалось отправить лог траяута в канал %s",
+                TRYOUT_LOG_CHANNEL_ID,
+            )
     category = None
     if CLOSED_CATEGORY_ID:
         candidate = inter.guild.get_channel(CLOSED_CATEGORY_ID)
