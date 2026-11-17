@@ -1539,6 +1539,40 @@ class TryoutApplicationModal(disnake.ui.Modal):
         await create_tryout(inter, loadout)
 
 
+def tryout_decision_rows():
+    """Кнопки «Принять / Выбрать тир» и «Отклонить» на карточке траяута."""
+    return [
+        disnake.ui.ActionRow(
+            disnake.ui.Button(
+                label="Принять / Выбрать тир",
+                emoji="✅",
+                style=disnake.ButtonStyle.success,
+                custom_id="tryout:accept",
+            ),
+            disnake.ui.Button(
+                label="Отклонить",
+                emoji="❌",
+                style=disnake.ButtonStyle.danger,
+                custom_id="tryout:reject",
+            ),
+        )
+    ]
+
+
+def tryout_reopen_rows():
+    """Кнопка «Open» в закрытом траяуте."""
+    return [
+        disnake.ui.ActionRow(
+            disnake.ui.Button(
+                label="Open",
+                emoji="🔓",
+                style=disnake.ButtonStyle.secondary,
+                custom_id="tryout:reopen",
+            )
+        )
+    ]
+
+
 async def create_tryout(inter, loadout: str):
     await inter.response.defer(ephemeral=True, with_message=True)
     guild = inter.guild
@@ -1632,22 +1666,7 @@ async def create_tryout(inter, loadout: str):
         embed.set_thumbnail(url=applicant.display_avatar.url)
         embed.set_footer(text=f"Pulse • Tryout №{number}")
 
-        buttons = [
-            disnake.ui.ActionRow(
-                disnake.ui.Button(
-                    label="Принять / Выбрать тир",
-                    emoji="✅",
-                    style=disnake.ButtonStyle.success,
-                    custom_id="tryout:accept",
-                ),
-                disnake.ui.Button(
-                    label="Отклонить",
-                    emoji="❌",
-                    style=disnake.ButtonStyle.danger,
-                    custom_id="tryout:reject",
-                ),
-            )
-        ]
+        buttons = tryout_decision_rows()
 
         try:
             msg = await channel.send(
@@ -1810,6 +1829,26 @@ async def finish_tryout(inter, row, *, accepted, tier_name=None, count=None):
         logging.exception("Не удалось закрыть канал траяута %s", row["number"])
         notes.append("⚠️ Не удалось убрать доступ заявителя или переместить канал")
 
+    closed_embed = disnake.Embed(
+        title=(
+            f"🔒 Траяут №{row['number']} принят"
+            if accepted
+            else f"🔒 Траяут №{row['number']} отклонён"
+        ),
+        description=(
+            f"Игрок: <@{row['user_id']}>\n"
+            f"Траяутер: {inter.author.mention}"
+            + (f"\nТир: **{tier_name}**" if accepted else "")
+        ),
+        colour=0x57F287 if accepted else 0xED4245,
+        timestamp=disnake.utils.utcnow(),
+    )
+    closed_embed.set_footer(text=f"Pulse • Tryout №{row['number']}")
+    try:
+        await channel.send(embed=closed_embed, components=tryout_reopen_rows())
+    except disnake.HTTPException:
+        logging.exception("Не удалось отправить итог траяута %s", row["number"])
+
     if DELETE_AFTER > 0:
         run_background(delete_later(channel, DELETE_AFTER))
 
@@ -1950,10 +1989,150 @@ class TryoutRejectModal(disnake.ui.Modal):
             await finish_tryout(inter, row, accepted=False)
 
 
+async def reopen_tryout(inter):
+    await inter.response.defer(ephemeral=True, with_message=True)
+
+    guild = inter.guild
+    channel = inter.channel
+
+    async with tryout_lock:
+        row = db.execute(
+            """SELECT * FROM tryouts
+               WHERE channel_id=? AND state IN ('accepted', 'rejected')""",
+            (channel.id,),
+        ).fetchone()
+
+        if row is None:
+            await inter.edit_original_response(
+                content="Этот траяут уже открыт или не найден."
+            )
+            return
+
+        other = db.execute(
+            """SELECT channel_id FROM tryouts
+               WHERE guild_id=? AND user_id=? AND channel_id!=? AND state='open'""",
+            (guild.id, row["user_id"], channel.id),
+        ).fetchone()
+
+        if other is not None and guild.get_channel(other["channel_id"]) is not None:
+            await inter.edit_original_response(
+                content=(
+                    f"У <@{row['user_id']}> уже есть открытый траяут: "
+                    f"<#{other['channel_id']}>. Сначала закройте его."
+                )
+            )
+            return
+
+        try:
+            member = guild.get_member(row["user_id"])
+            if member is None:
+                member = await guild.fetch_member(row["user_id"])
+        except disnake.NotFound:
+            await inter.edit_original_response(
+                content="Игрок уже вышел с сервера — открыть траяут нельзя."
+            )
+            return
+        except disnake.HTTPException:
+            logging.exception("Не удалось получить игрока траяута")
+            await inter.edit_original_response(
+                content="Не удалось найти игрока. Попробуйте ещё раз."
+            )
+            return
+
+        # Возвращаем игроку доступ, остальные права канала не трогаем.
+        overwrites = dict(channel.overwrites)
+        overwrites[member] = disnake.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_message_history=True,
+            attach_files=True,
+            embed_links=True,
+        )
+
+        payload = {
+            "name": f"tryout-{row['number']}",
+            "overwrites": overwrites,
+            "reason": f"Траяут открыт заново: {inter.author.id}",
+        }
+
+        category = guild.get_channel(TRYOUT_CATEGORY_ID)
+        if isinstance(category, disnake.CategoryChannel):
+            payload["category"] = category
+
+        try:
+            await channel.edit(**payload)
+        except disnake.HTTPException:
+            logging.exception("Не удалось открыть траяут %s заново", channel.id)
+            await inter.edit_original_response(
+                content=(
+                    "Не удалось открыть канал заново. Проверьте право бота "
+                    "«Управлять каналами»."
+                )
+            )
+            return
+
+        with db:
+            db.execute(
+                """UPDATE tryouts
+                   SET state='open', tier_name=NULL, moderator_id=NULL
+                   WHERE channel_id=?""",
+                (channel.id,),
+            )
+
+    problems = []
+
+    try:
+        card = await channel.fetch_message(row["message_id"])
+        await card.edit(components=tryout_decision_rows())
+    except disnake.HTTPException:
+        logging.warning("Не удалось вернуть кнопки траяута %s", channel.id)
+        problems.append("не удалось вернуть кнопки «Принять / Отклонить»")
+
+    try:
+        await inter.message.edit(components=[])
+    except disnake.HTTPException:
+        logging.warning("Не удалось убрать кнопку Open в траяуте %s", channel.id)
+
+    embed = disnake.Embed(
+        title=f"🔓 Траяут №{row['number']} открыт заново",
+        description=(
+            f"Игрок: <@{row['user_id']}>\n"
+            f"Открыл: {inter.author.mention}"
+        ),
+        colour=0x5865F2,
+        timestamp=disnake.utils.utcnow(),
+    )
+    embed.set_footer(text=f"Pulse • Tryout №{row['number']}")
+
+    try:
+        await channel.send(
+            content=f"<@{row['user_id']}>",
+            embed=embed,
+            allowed_mentions=disnake.AllowedMentions(
+                users=[disnake.Object(id=row["user_id"])],
+                roles=False,
+                everyone=False,
+            ),
+        )
+    except disnake.HTTPException:
+        logging.exception("Не удалось отправить сообщение об открытии траяута")
+
+    text = (
+        f"🔓 Траяут №{row['number']} снова открыт. "
+        "Игрок опять видит канал."
+    )
+    if problems:
+        text += "\n⚠️ " + "; ".join(problems)
+
+    await inter.edit_original_response(content=text)
+
+
 @bot.listen("on_button_click")
 async def tryout_buttons(inter: disnake.MessageInteraction):
     custom_id = inter.data.custom_id or ""
-    if custom_id not in ("tryout:create", "tryout:accept", "tryout:reject"):
+    if custom_id not in (
+        "tryout:create", "tryout:accept", "tryout:reject", "tryout:reopen"
+    ):
         return
 
     if inter.guild is None:
@@ -1976,6 +2155,10 @@ async def tryout_buttons(inter: disnake.MessageInteraction):
         return
 
     if not await require_tryout_staff(inter):
+        return
+
+    if custom_id == "tryout:reopen":
+        await reopen_tryout(inter)
         return
 
     row = current_tryout(inter.channel_id)
