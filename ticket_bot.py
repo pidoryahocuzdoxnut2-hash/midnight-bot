@@ -657,6 +657,40 @@ def ticket_overwrites(guild, applicant):
     return overwrites
 
 
+def ticket_decision_rows():
+    """Кнопки «Принять» / «Отклонить» на карточке заявки."""
+    return [
+        disnake.ui.ActionRow(
+            disnake.ui.Button(
+                label="Принять",
+                emoji="✅",
+                style=disnake.ButtonStyle.success,
+                custom_id="ticket:accept",
+            ),
+            disnake.ui.Button(
+                label="Отклонить",
+                emoji="❌",
+                style=disnake.ButtonStyle.danger,
+                custom_id="ticket:reject",
+            ),
+        )
+    ]
+
+
+def ticket_reopen_rows():
+    """Кнопка «Open» под итогом закрытого тикета."""
+    return [
+        disnake.ui.ActionRow(
+            disnake.ui.Button(
+                label="Open",
+                emoji="🔓",
+                style=disnake.ButtonStyle.secondary,
+                custom_id="ticket:reopen",
+            )
+        )
+    ]
+
+
 async def create_ticket(inter, kind, answers):
     if inter.guild is None:
         await inter.response.send_message(
@@ -768,22 +802,7 @@ async def create_ticket(inter, kind, answers):
                 inline=False,
             )
 
-        components = [
-            disnake.ui.ActionRow(
-                disnake.ui.Button(
-                    label="Принять",
-                    emoji="✅",
-                    style=disnake.ButtonStyle.success,
-                    custom_id="ticket:accept",
-                ),
-                disnake.ui.Button(
-                    label="Отклонить",
-                    emoji="❌",
-                    style=disnake.ButtonStyle.danger,
-                    custom_id="ticket:reject",
-                ),
-            )
-        ]
+        components = ticket_decision_rows()
 
         try:
             message = await channel.send(
@@ -1024,7 +1043,7 @@ async def finish_ticket(inter, row, title, colour, description):
     )
 
     try:
-        await channel.send(embed=embed)
+        await channel.send(embed=embed, components=ticket_reopen_rows())
 
     except disnake.HTTPException:
         logging.exception("Не удалось отправить итог тикета")
@@ -1183,11 +1202,147 @@ class RejectModal(disnake.ui.Modal):
         )
 
 
+async def reopen_ticket(inter):
+    await inter.response.defer(ephemeral=True, with_message=True)
+
+    guild = inter.guild
+    channel = inter.channel
+
+    async with ticket_lock:
+        row = db.execute(
+            """
+            SELECT *
+            FROM tickets
+            WHERE channel_id=? AND state NOT IN ('open', 'processing')
+            """,
+            (channel.id,),
+        ).fetchone()
+
+        if row is None:
+            await inter.edit_original_response(
+                content="Этот тикет уже открыт или не найден."
+            )
+            return
+
+        other = db.execute(
+            """
+            SELECT channel_id
+            FROM tickets
+            WHERE guild_id=? AND user_id=? AND channel_id!=?
+              AND state IN ('open', 'processing')
+            """,
+            (guild.id, row["user_id"], channel.id),
+        ).fetchone()
+
+        if other is not None and guild.get_channel(other["channel_id"]) is not None:
+            await inter.edit_original_response(
+                content=(
+                    f"У <@{row['user_id']}> уже есть открытая заявка: "
+                    f"<#{other['channel_id']}>. Сначала закройте её."
+                )
+            )
+            return
+
+        try:
+            member = guild.get_member(row["user_id"])
+            if member is None:
+                member = await guild.fetch_member(row["user_id"])
+        except disnake.NotFound:
+            await inter.edit_original_response(
+                content="Заявитель уже вышел с сервера — открыть тикет нельзя."
+            )
+            return
+        except disnake.HTTPException:
+            logging.exception("Не удалось получить заявителя тикета")
+            await inter.edit_original_response(
+                content="Не удалось найти заявителя. Попробуйте ещё раз."
+            )
+            return
+
+        # Возвращаем заявителю доступ, остальные права канала не трогаем.
+        overwrites = dict(channel.overwrites)
+        overwrites[member] = ticket_overwrites(guild, member)[member]
+
+        payload = {
+            "name": f"ticket {row['number']}",
+            "overwrites": overwrites,
+            "reason": f"Тикет открыт заново: {inter.author.id}",
+        }
+
+        if TICKET_CATEGORY_ID:
+            category = guild.get_channel(TICKET_CATEGORY_ID)
+            if isinstance(category, disnake.CategoryChannel):
+                payload["category"] = category
+
+        try:
+            await channel.edit(**payload)
+        except disnake.HTTPException:
+            logging.exception("Не удалось открыть тикет %s заново", channel.id)
+            await inter.edit_original_response(
+                content=(
+                    "Не удалось открыть канал заново. Проверьте право бота "
+                    "«Управлять каналами»."
+                )
+            )
+            return
+
+        set_ticket_state(channel.id, "open")
+
+    problems = []
+
+    try:
+        card = await channel.fetch_message(row["message_id"])
+        await card.edit(components=ticket_decision_rows())
+    except disnake.HTTPException:
+        logging.warning("Не удалось вернуть кнопки тикета %s", channel.id)
+        problems.append("не удалось вернуть кнопки «Принять / Отклонить»")
+
+    try:
+        await inter.message.edit(components=[])
+    except disnake.HTTPException:
+        logging.warning("Не удалось убрать кнопку Open в тикете %s", channel.id)
+
+    embed = disnake.Embed(
+        title="🔓 Тикет открыт заново",
+        description=(
+            f"Заявитель: <@{row['user_id']}>\n"
+            f"Открыл: {inter.author.mention}"
+        ),
+        colour=0x5865F2,
+        timestamp=disnake.utils.utcnow(),
+    )
+    embed.set_footer(
+        text=f"Тикет №{row['number']} • {KIND_NAMES[row['kind']]}"
+    )
+
+    try:
+        await channel.send(
+            content=f"<@{row['user_id']}>",
+            embed=embed,
+            allowed_mentions=disnake.AllowedMentions(
+                users=[disnake.Object(id=row["user_id"])],
+                roles=False,
+                everyone=False,
+            ),
+        )
+    except disnake.HTTPException:
+        logging.exception("Не удалось отправить сообщение об открытии тикета")
+
+    text = (
+        f"🔓 Тикет №{row['number']} снова открыт. "
+        "Заявитель опять видит канал."
+    )
+    if problems:
+        text += "\n⚠️ " + "; ".join(problems)
+
+    await inter.edit_original_response(content=text)
+
+
 @bot.listen("on_button_click")
 async def ticket_buttons(inter: disnake.MessageInteraction):
     custom_id = inter.data.custom_id or ""
 
-    if custom_id not in ("ticket:accept", "ticket:reject"):
+    if custom_id not in ("ticket:accept", "ticket:reject", "ticket:reopen"):
         return
 
     if inter.guild is None:
@@ -1202,6 +1357,10 @@ async def ticket_buttons(inter: disnake.MessageInteraction):
 
     if custom_id == "ticket:accept":
         await accept_ticket(inter)
+        return
+
+    if custom_id == "ticket:reopen":
+        await reopen_ticket(inter)
         return
 
     row = open_ticket(inter.channel.id)
