@@ -82,6 +82,11 @@ STAFF_ROLE_IDS = (
     1527269547181211768,
 )
 
+# Роли, которые видят каналы тикетов (без траяутов), но не обрабатывают их.
+TICKET_VIEWER_ROLE_IDS = (
+    1538551791027757228,
+)
+
 GW_ROLE_IDS = (
     1527269547181211768,
     1527329319544950784,
@@ -652,6 +657,15 @@ def ticket_overwrites(guild, applicant):
                 attach_files=True,
                 embed_links=True,
                 manage_messages=True,
+            )
+
+    for role_id in TICKET_VIEWER_ROLE_IDS:
+        role = guild.get_role(role_id)
+
+        if role is not None and role not in overwrites:
+            overwrites[role] = disnake.PermissionOverwrite(
+                view_channel=True,
+                read_message_history=True,
             )
 
     return overwrites
