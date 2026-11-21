@@ -2250,6 +2250,47 @@ async def tryout_tier_dropdown(inter: disnake.MessageInteraction):
 
 SUPPORT_CHANNEL_ID = 1527030251446599680
 
+# Общий для всего сервера КД на команды с массовым пингом, в секундах.
+# Хранится в памяти, после перезапуска бота сбрасывается.
+COMMAND_COOLDOWNS = {
+    "supp": 90,
+    "ms": 90,
+    "gw": 30,
+}
+COMMAND_LAST_USED = {}
+
+
+def cooldown_ready_at(guild_id, name):
+    """Когда команду снова можно вызвать (unix-время), или None, если уже можно."""
+    used = COMMAND_LAST_USED.get((guild_id, name))
+    if used is None:
+        return None
+    ready_at = used + COMMAND_COOLDOWNS[name]
+    return ready_at if ready_at > time.time() else None
+
+
+def take_cooldown(guild_id, name):
+    """Проверяет КД и сразу его занимает.
+
+    Возвращает None, если команду можно выполнять, иначе время окончания КД.
+    """
+    ready_at = cooldown_ready_at(guild_id, name)
+    if ready_at is None:
+        COMMAND_LAST_USED[(guild_id, name)] = time.time()
+    return ready_at
+
+
+def release_cooldown(guild_id, name):
+    """Снимает КД, если команда так и не смогла ничего отправить."""
+    COMMAND_LAST_USED.pop((guild_id, name), None)
+
+
+def cooldown_message(name, ready_at):
+    return (
+        f"⏳ /{name} на кулдауне для всего сервера. "
+        f"Снова можно будет <t:{int(ready_at) + 1}:R>."
+    )
+
 SUPPORT_SEPARATOR = (
     "༺✿𓄂𓆩✦𓆪༺♛𓄂𓆩𓆪༺✥𓄂𓆩☆𓆪༺✬𓄂𓆩✿𓆪༺☆𓄂𓆪✧𓆜✥𓄂"
 )
@@ -2336,6 +2377,13 @@ class SupportModal(disnake.ui.Modal):
             )
             return
 
+        ready_at = take_cooldown(inter.guild.id, "supp")
+        if ready_at is not None:
+            await inter.response.send_message(
+                cooldown_message("supp", ready_at), ephemeral=True
+            )
+            return
+
         await inter.response.defer(ephemeral=True, with_message=True)
 
         message = (
@@ -2359,6 +2407,7 @@ class SupportModal(disnake.ui.Modal):
             )
         except disnake.HTTPException:
             logging.exception("Не удалось опубликовать сообщение /supp")
+            release_cooldown(inter.guild.id, "supp")
             await inter.edit_original_response(
                 content="Не удалось отправить запрос. Проверь права бота в этом канале."
             )
@@ -2385,6 +2434,13 @@ async def supp_command(inter: disnake.ApplicationCommandInteraction):
         await inter.response.send_message(
             f"Команда /supp доступна только в канале <#{SUPPORT_CHANNEL_ID}>.",
             ephemeral=True,
+        )
+        return
+
+    ready_at = cooldown_ready_at(inter.guild.id, "supp")
+    if ready_at is not None:
+        await inter.response.send_message(
+            cooldown_message("supp", ready_at), ephemeral=True
         )
         return
 
@@ -2501,6 +2557,13 @@ class GWModal(disnake.ui.Modal):
         else:
             broadcast = selection == "yes"
 
+        ready_at = take_cooldown(inter.guild.id, "gw")
+        if ready_at is not None:
+            await inter.response.send_message(
+                cooldown_message("gw", ready_at), ephemeral=True
+            )
+            return
+
         await inter.response.defer(ephemeral=True, with_message=True)
 
         announcement = (
@@ -2523,6 +2586,7 @@ class GWModal(disnake.ui.Modal):
             )
         except disnake.HTTPException:
             logging.exception("Не удалось опубликовать сообщение /gw")
+            release_cooldown(inter.guild.id, "gw")
             await inter.edit_original_response(
                 content="Не удалось отправить /gw в канал. Проверь права бота."
             )
@@ -2616,6 +2680,13 @@ async def gw_command(inter: disnake.ApplicationCommandInteraction):
         )
         return
 
+    ready_at = cooldown_ready_at(inter.guild.id, "gw")
+    if ready_at is not None:
+        await inter.response.send_message(
+            cooldown_message("gw", ready_at), ephemeral=True
+        )
+        return
+
     await inter.response.send_modal(GWModal())
 
 
@@ -2664,6 +2735,13 @@ async def masslog_command(inter: disnake.ApplicationCommandInteraction):
         )
         return
 
+    ready_at = take_cooldown(inter.guild.id, "ms")
+    if ready_at is not None:
+        await inter.response.send_message(
+            cooldown_message("ms", ready_at), ephemeral=True
+        )
+        return
+
     content = (
         "# MASSLOG EVERYONE\n\n"
         f"{MASSLOG_DECORATION}\n\n"
@@ -2685,6 +2763,7 @@ async def masslog_command(inter: disnake.ApplicationCommandInteraction):
         )
     except disnake.HTTPException:
         logging.exception("Не удалось отправить MASSLOG через /ms")
+        release_cooldown(inter.guild.id, "ms")
         if not inter.response.is_done():
             await inter.response.send_message(
                 "Не удалось отправить MASSLOG. Проверь права бота в этом канале.",
